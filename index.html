@@ -404,7 +404,7 @@ footer{
     </div>
 
     <button class="primary danger" onclick="clearAllData()">
-      Xoá toàn bộ dữ liệu trên thiết bị
+      Xoá toàn bộ dữ liệu trên database
     </button>
 
   </div>
@@ -416,37 +416,108 @@ footer{
 </footer>
 
 
+<!-- SUPABASE -->
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
 <script>
 
-let members =
-  JSON.parse(localStorage.getItem("pickleball_members") || "[]");
+/* =========================================================
+   SUPABASE CONFIG
+   ========================================================= */
 
-let tournaments =
-  JSON.parse(localStorage.getItem("pickleball_tournaments") || "[]");
+const SUPABASE_URL =
+  "https://uwbyyghvzpcaybfdwwcn.supabase.co";
 
-let results =
-  JSON.parse(localStorage.getItem("pickleball_results") || "[]");
+const SUPABASE_ANON_KEY =
+  "sb_publishable_0Wrd_3AAedRjNKQlN6to8w_XIQM-IXz";
 
 
-function saveData(){
+const { createClient } = window.supabase;
 
-  localStorage.setItem(
-    "pickleball_members",
-    JSON.stringify(members)
+const supabaseClient =
+  createClient(
+    SUPABASE_URL,
+    SUPABASE_ANON_KEY
   );
 
-  localStorage.setItem(
-    "pickleball_tournaments",
-    JSON.stringify(tournaments)
-  );
 
-  localStorage.setItem(
-    "pickleball_results",
-    JSON.stringify(results)
-  );
+/* =========================================================
+   DỮ LIỆU
+   ========================================================= */
+
+let members = [];
+let tournaments = [];
+let results = [];
+
+
+/* =========================================================
+   LOAD DỮ LIỆU TỪ SUPABASE
+   ========================================================= */
+
+async function loadData(){
+
+  try{
+
+    const membersResponse =
+      await supabaseClient
+        .from("members")
+        .select("*")
+        .order("created_at",{ascending:false});
+
+    if(membersResponse.error)
+      throw membersResponse.error;
+
+
+    const tournamentsResponse =
+      await supabaseClient
+        .from("tournaments")
+        .select("*")
+        .order("created_at",{ascending:false});
+
+    if(tournamentsResponse.error)
+      throw tournamentsResponse.error;
+
+
+    const resultsResponse =
+      await supabaseClient
+        .from("results")
+        .select("*")
+        .order("created_at",{ascending:false});
+
+    if(resultsResponse.error)
+      throw resultsResponse.error;
+
+
+    members =
+      membersResponse.data || [];
+
+    tournaments =
+      tournamentsResponse.data || [];
+
+    results =
+      resultsResponse.data || [];
+
+
+    renderAll();
+
+  }catch(error){
+
+    console.error(error);
+
+    alert(
+      "Không thể tải dữ liệu từ máy chủ Supabase.\n\n" +
+      error.message
+    );
+
+  }
 
 }
 
+
+/* =========================================================
+   ĐIỀU HƯỚNG
+   ========================================================= */
 
 function openSection(id){
 
@@ -483,158 +554,348 @@ function goHome(){
 }
 
 
-function addMember(){
+/* =========================================================
+   THÀNH VIÊN
+   ========================================================= */
+
+async function addMember(){
 
   const name =
-    document.getElementById("memberName").value.trim();
+    document.getElementById("memberName")
+      .value.trim();
 
   const phone =
-    document.getElementById("memberPhone").value.trim();
+    document.getElementById("memberPhone")
+      .value.trim();
 
   const level =
-    document.getElementById("memberLevel").value;
+    document.getElementById("memberLevel")
+      .value;
+
 
   if(!name){
+
     alert("Vui lòng nhập họ tên.");
     return;
+
   }
 
-  members.push({
-    id:Date.now(),
-    name:name,
-    phone:phone,
-    level:level || "Chưa chấm",
-    created:new Date().toLocaleDateString("vi-VN")
-  });
 
-  saveData();
+  try{
 
-  document.getElementById("memberName").value="";
-  document.getElementById("memberPhone").value="";
-  document.getElementById("memberLevel").value="";
+    const { error } =
+      await supabaseClient
+        .from("members")
+        .insert([{
 
-  renderAll();
+          name:name,
 
-  alert("Đã thêm thành viên.");
+          phone:phone,
+
+          level:level || "Chưa chấm"
+
+        }]);
+
+
+    if(error)
+      throw error;
+
+
+    document.getElementById("memberName")
+      .value="";
+
+    document.getElementById("memberPhone")
+      .value="";
+
+    document.getElementById("memberLevel")
+      .value="";
+
+
+    await loadData();
+
+
+    alert("Đã thêm thành viên.");
+
+  }catch(error){
+
+    console.error(error);
+
+    alert(
+      "Không thể thêm thành viên.\n\n" +
+      error.message
+    );
+
+  }
+
 }
 
 
-function deleteMember(id){
+async function deleteMember(id){
 
-  if(!confirm("Xoá thành viên này?")) return;
+  if(!confirm("Xoá thành viên này?"))
+    return;
 
-  members =
-    members.filter(x=>x.id!==id);
 
-  saveData();
+  try{
 
-  renderAll();
+    const { error } =
+      await supabaseClient
+        .from("members")
+        .delete()
+        .eq("id",id);
+
+
+    if(error)
+      throw error;
+
+
+    await loadData();
+
+  }catch(error){
+
+    console.error(error);
+
+    alert(
+      "Không thể xoá thành viên.\n\n" +
+      error.message
+    );
+
+  }
 
 }
 
 
-function addTournament(){
+/* =========================================================
+   GIẢI ĐẤU
+   ========================================================= */
+
+async function addTournament(){
 
   const name =
-    document.getElementById("tournamentName").value.trim();
+    document.getElementById("tournamentName")
+      .value.trim();
 
   const date =
-    document.getElementById("tournamentDate").value;
+    document.getElementById("tournamentDate")
+      .value;
 
   const place =
-    document.getElementById("tournamentPlace").value.trim();
+    document.getElementById("tournamentPlace")
+      .value.trim();
+
 
   if(!name){
+
     alert("Vui lòng nhập tên giải.");
     return;
+
   }
 
-  tournaments.push({
-    id:Date.now(),
-    name:name,
-    date:date,
-    place:place
-  });
 
-  saveData();
+  try{
 
-  document.getElementById("tournamentName").value="";
-  document.getElementById("tournamentDate").value="";
-  document.getElementById("tournamentPlace").value="";
+    const { error } =
+      await supabaseClient
+        .from("tournaments")
+        .insert([{
 
-  renderAll();
+          name:name,
 
-  alert("Đã tạo giải đấu.");
+          date:date || null,
+
+          place:place
+
+        }]);
+
+
+    if(error)
+      throw error;
+
+
+    document.getElementById("tournamentName")
+      .value="";
+
+    document.getElementById("tournamentDate")
+      .value="";
+
+    document.getElementById("tournamentPlace")
+      .value="";
+
+
+    await loadData();
+
+
+    alert("Đã tạo giải đấu.");
+
+  }catch(error){
+
+    console.error(error);
+
+    alert(
+      "Không thể tạo giải đấu.\n\n" +
+      error.message
+    );
+
+  }
+
 }
 
 
-function deleteTournament(id){
+async function deleteTournament(id){
 
-  if(!confirm("Xoá giải đấu này?")) return;
+  if(!confirm("Xoá giải đấu này?"))
+    return;
 
-  tournaments =
-    tournaments.filter(x=>x.id!==id);
 
-  saveData();
+  try{
 
-  renderAll();
+    const { error } =
+      await supabaseClient
+        .from("tournaments")
+        .delete()
+        .eq("id",id);
+
+
+    if(error)
+      throw error;
+
+
+    await loadData();
+
+  }catch(error){
+
+    console.error(error);
+
+    alert(
+      "Không thể xoá giải đấu.\n\n" +
+      error.message
+    );
+
+  }
 
 }
 
 
-function addResult(){
+/* =========================================================
+   KẾT QUẢ
+   ========================================================= */
+
+async function addResult(){
 
   const tournament =
-    document.getElementById("resultTournament").value.trim();
+    document.getElementById("resultTournament")
+      .value.trim();
 
   const player =
-    document.getElementById("resultPlayer").value.trim();
+    document.getElementById("resultPlayer")
+      .value.trim();
 
   const position =
-    document.getElementById("resultPosition").value.trim();
+    document.getElementById("resultPosition")
+      .value.trim();
+
 
   if(!tournament || !player){
+
     alert("Vui lòng nhập đầy đủ thông tin.");
     return;
+
   }
 
-  results.push({
-    id:Date.now(),
-    tournament:tournament,
-    player:player,
-    position:position
-  });
 
-  saveData();
+  try{
 
-  document.getElementById("resultTournament").value="";
-  document.getElementById("resultPlayer").value="";
-  document.getElementById("resultPosition").value="";
+    const { error } =
+      await supabaseClient
+        .from("results")
+        .insert([{
 
-  renderAll();
+          tournament:tournament,
 
-  alert("Đã thêm kết quả.");
+          player:player,
+
+          position:position
+
+        }]);
+
+
+    if(error)
+      throw error;
+
+
+    document.getElementById("resultTournament")
+      .value="";
+
+    document.getElementById("resultPlayer")
+      .value="";
+
+    document.getElementById("resultPosition")
+      .value="";
+
+
+    await loadData();
+
+
+    alert("Đã thêm kết quả.");
+
+  }catch(error){
+
+    console.error(error);
+
+    alert(
+      "Không thể thêm kết quả.\n\n" +
+      error.message
+    );
+
+  }
+
 }
 
 
-function deleteResult(id){
+async function deleteResult(id){
 
-  if(!confirm("Xoá kết quả này?")) return;
+  if(!confirm("Xoá kết quả này?"))
+    return;
 
-  results =
-    results.filter(x=>x.id!==id);
 
-  saveData();
+  try{
 
-  renderAll();
+    const { error } =
+      await supabaseClient
+        .from("results")
+        .delete()
+        .eq("id",id);
+
+
+    if(error)
+      throw error;
+
+
+    await loadData();
+
+  }catch(error){
+
+    console.error(error);
+
+    alert(
+      "Không thể xoá kết quả.\n\n" +
+      error.message
+    );
+
+  }
 
 }
 
+
+/* =========================================================
+   HIỂN THỊ THÀNH VIÊN
+   ========================================================= */
 
 function renderMembers(){
 
   const box =
     document.getElementById("memberList");
+
 
   if(!members.length){
 
@@ -642,21 +903,30 @@ function renderMembers(){
       '<div class="empty">Chưa có thành viên.</div>';
 
     return;
+
   }
+
 
   box.innerHTML =
     members.map(m=>`
 
       <div class="item">
 
-        <strong>${escapeHTML(m.name)}</strong>
+        <strong>
+          ${escapeHTML(m.name)}
+        </strong>
 
         <div class="small">
-          📱 ${escapeHTML(m.phone || "Chưa có SĐT")}
+          📱 ${escapeHTML(
+            m.phone || "Chưa có SĐT"
+          )}
         </div>
 
         <div class="small">
-          ⭐ Trình độ: ${escapeHTML(m.level)}
+          ⭐ Trình độ:
+          ${escapeHTML(
+            m.level || "Chưa chấm"
+          )}
         </div>
 
         <br>
@@ -674,10 +944,15 @@ function renderMembers(){
 }
 
 
+/* =========================================================
+   XẾP HẠNG
+   ========================================================= */
+
 function renderRanking(){
 
   const box =
     document.getElementById("rankingList");
+
 
   if(!members.length){
 
@@ -685,14 +960,17 @@ function renderRanking(){
       '<div class="empty">Chưa có dữ liệu trình độ.</div>';
 
     return;
+
   }
+
 
   const sorted =
     [...members].sort(
       (a,b)=>
-        parseFloat(b.level) -
-        parseFloat(a.level)
+        parseFloat(b.level || 0) -
+        parseFloat(a.level || 0)
     );
+
 
   box.innerHTML =
     sorted.map((m,i)=>`
@@ -704,7 +982,10 @@ function renderRanking(){
         </strong>
 
         <div class="small">
-          ⭐ Trình độ: ${escapeHTML(m.level)}
+          ⭐ Trình độ:
+          ${escapeHTML(
+            m.level || "Chưa chấm"
+          )}
         </div>
 
       </div>
@@ -714,10 +995,15 @@ function renderRanking(){
 }
 
 
+/* =========================================================
+   GIẢI ĐẤU
+   ========================================================= */
+
 function renderTournaments(){
 
   const box =
     document.getElementById("tournamentList");
+
 
   if(!tournaments.length){
 
@@ -725,21 +1011,29 @@ function renderTournaments(){
       '<div class="empty">Chưa có giải đấu.</div>';
 
     return;
+
   }
+
 
   box.innerHTML =
     tournaments.map(t=>`
 
       <div class="item">
 
-        <strong>${escapeHTML(t.name)}</strong>
+        <strong>
+          ${escapeHTML(t.name)}
+        </strong>
 
         <div class="small">
-          📅 ${escapeHTML(t.date || "Chưa xác định")}
+          📅 ${escapeHTML(
+            t.date || "Chưa xác định"
+          )}
         </div>
 
         <div class="small">
-          📍 ${escapeHTML(t.place || "Chưa xác định")}
+          📍 ${escapeHTML(
+            t.place || "Chưa xác định"
+          )}
         </div>
 
         <br>
@@ -757,10 +1051,15 @@ function renderTournaments(){
 }
 
 
+/* =========================================================
+   KẾT QUẢ
+   ========================================================= */
+
 function renderResults(){
 
   const box =
     document.getElementById("resultList");
+
 
   if(!results.length){
 
@@ -768,7 +1067,9 @@ function renderResults(){
       '<div class="empty">Chưa có kết quả.</div>';
 
     return;
+
   }
+
 
   box.innerHTML =
     results.map(r=>`
@@ -776,15 +1077,22 @@ function renderResults(){
       <div class="item">
 
         <strong>
-          🏆 ${escapeHTML(r.tournament)}
+          🏆 ${escapeHTML(
+            r.tournament
+          )}
         </strong>
 
         <div class="small">
-          🎾 ${escapeHTML(r.player)}
+          🎾 ${escapeHTML(
+            r.player
+          )}
         </div>
 
         <div class="small">
-          🥇 Thứ hạng: ${escapeHTML(r.position || "—")}
+          🥇 Thứ hạng:
+          ${escapeHTML(
+            r.position || "—"
+          )}
         </div>
 
         <br>
@@ -802,65 +1110,145 @@ function renderResults(){
 }
 
 
+/* =========================================================
+   QUẢN TRỊ
+   ========================================================= */
+
 function renderAdmin(){
 
   document.getElementById("totalMembers")
     .textContent =
-    members.length+" thành viên";
+      members.length +
+      " thành viên";
+
 
   document.getElementById("totalTournaments")
     .textContent =
-    tournaments.length+" giải đấu";
+      tournaments.length +
+      " giải đấu";
+
 
   document.getElementById("totalResults")
     .textContent =
-    results.length+" kết quả";
+      results.length +
+      " kết quả";
 
 }
 
 
+/* =========================================================
+   RENDER
+   ========================================================= */
+
 function renderAll(){
 
   renderMembers();
+
   renderRanking();
+
   renderTournaments();
+
   renderResults();
+
   renderAdmin();
 
 }
 
 
-function clearAllData(){
+/* =========================================================
+   XOÁ TOÀN BỘ DỮ LIỆU
+   ========================================================= */
+
+async function clearAllData(){
 
   if(!confirm(
-    "CẢNH BÁO: Xoá toàn bộ dữ liệu trên thiết bị này?"
-  )) return;
+    "CẢNH BÁO: Xoá toàn bộ dữ liệu trên DATABASE?\n\n" +
+    "Thao tác này sẽ xoá dữ liệu chung."
+  )){
+    return;
+  }
 
-  members=[];
-  tournaments=[];
-  results=[];
 
-  saveData();
-  renderAll();
+  try{
 
-  alert("Đã xoá dữ liệu.");
+    const membersDelete =
+      await supabaseClient
+        .from("members")
+        .delete()
+        .not("id","is",null);
+
+
+    if(membersDelete.error)
+      throw membersDelete.error;
+
+
+    const tournamentsDelete =
+      await supabaseClient
+        .from("tournaments")
+        .delete()
+        .not("id","is",null);
+
+
+    if(tournamentsDelete.error)
+      throw tournamentsDelete.error;
+
+
+    const resultsDelete =
+      await supabaseClient
+        .from("results")
+        .delete()
+        .not("id","is",null);
+
+
+    if(resultsDelete.error)
+      throw resultsDelete.error;
+
+
+    await loadData();
+
+
+    alert("Đã xoá toàn bộ dữ liệu.");
+
+  }catch(error){
+
+    console.error(error);
+
+    alert(
+      "Không thể xoá toàn bộ dữ liệu.\n\n" +
+      error.message
+    );
+
+  }
 
 }
 
 
+/* =========================================================
+   BẢO VỆ HTML
+   ========================================================= */
+
 function escapeHTML(text){
 
   return String(text)
+
     .replaceAll("&","&amp;")
+
     .replaceAll("<","&lt;")
+
     .replaceAll(">","&gt;")
+
     .replaceAll('"',"&quot;")
+
     .replaceAll("'","&#039;");
 
 }
 
 
-renderAll();
+/* =========================================================
+   KHỞI ĐỘNG
+   ========================================================= */
+
+loadData();
 
 </script>
 
