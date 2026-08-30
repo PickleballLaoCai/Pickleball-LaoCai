@@ -1,123 +1,868 @@
 <!DOCTYPE html>
 <html lang="vi">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pickleball Lào Cai</title>
 
-  <title>Pickleball Lào Cai</title>
+<style>
+*{
+  box-sizing:border-box;
+  margin:0;
+  padding:0;
+}
 
-  <style>
-    * {
-      box-sizing: border-box;
-    }
+body{
+  font-family:Arial,Helvetica,sans-serif;
+  background:#f1f5fb;
+  color:#172033;
+}
 
-    body {
-      margin: 0;
-      font-family: Arial, sans-serif;
-      background: #f1f4fb;
-      color: #222;
-    }
+header{
+  background:#4164b5;
+  color:white;
+  text-align:center;
+  padding:28px 15px 32px;
+}
 
-    .header {
-      background: #3158ad;
-      color: white;
-      padding: 35px 20px;
-      text-align: center;
-    }
+header h1{
+  font-size:34px;
+  margin-bottom:8px;
+}
 
-    .header h1 {
-      margin: 0;
-      font-size: 30px;
-    }
+header p{
+  font-size:18px;
+  opacity:.95;
+}
 
-    .header p {
-      margin: 8px 0 0;
-      font-size: 16px;
-    }
+.container{
+  max-width:900px;
+  margin:auto;
+  padding:22px 16px 45px;
+}
 
-    .container {
-      max-width: 600px;
-      margin: auto;
-      padding: 20px;
-    }
+.welcome{
+  background:white;
+  border-radius:28px;
+  padding:32px 22px;
+  text-align:center;
+  box-shadow:0 8px 25px rgba(0,0,0,.08);
+  margin-bottom:20px;
+}
 
-    .welcome {
-      background: white;
-      border-radius: 18px;
-      padding: 25px;
-      margin-bottom: 20px;
-      text-align: center;
-    }
+.welcome h2{
+  color:#4164b5;
+  font-size:32px;
+  margin-bottom:14px;
+}
 
-    .welcome h2 {
-      color: #3158ad;
-      margin-top: 0;
-    }
+.welcome p{
+  font-size:18px;
+  line-height:1.5;
+}
 
-    .menu {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 15px;
-    }
+.grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:16px;
+}
 
-    .menu button {
-      border: none;
-      background: white;
-      border-radius: 18px;
-      padding: 25px 10px;
-      font-size: 17px;
-      font-weight: bold;
-      color: #3158ad;
-      box-shadow: 0 3px 10px rgba(0,0,0,0.08);
-    }
+.card{
+  background:white;
+  border:0;
+  border-radius:25px;
+  padding:30px 15px;
+  min-height:170px;
+  box-shadow:0 8px 22px rgba(0,0,0,.07);
+  cursor:pointer;
+  text-align:center;
+  transition:.2s;
+}
 
-    .menu button:active {
-      transform: scale(0.97);
-    }
+.card:active{
+  transform:scale(.97);
+}
 
-    .footer {
-      text-align: center;
-      color: #777;
-      padding: 30px 10px;
-      font-size: 14px;
-    }
-  </style>
+.card .icon{
+  font-size:52px;
+  margin-bottom:12px;
+}
+
+.card h3{
+  color:#4164b5;
+  font-size:24px;
+}
+
+.section{
+  display:none;
+  background:white;
+  border-radius:25px;
+  padding:22px;
+  margin-top:20px;
+  box-shadow:0 8px 22px rgba(0,0,0,.07);
+}
+
+.section.active{
+  display:block;
+}
+
+.section h2{
+  color:#4164b5;
+  margin-bottom:18px;
+}
+
+.back{
+  display:inline-block;
+  background:#4164b5;
+  color:white;
+  border:0;
+  border-radius:12px;
+  padding:11px 18px;
+  margin-bottom:20px;
+  font-size:16px;
+  cursor:pointer;
+}
+
+input,select,button{
+  font-family:inherit;
+}
+
+input,select{
+  width:100%;
+  padding:13px;
+  border:1px solid #d6dce8;
+  border-radius:12px;
+  font-size:16px;
+  margin-bottom:12px;
+}
+
+.primary{
+  width:100%;
+  padding:14px;
+  border:0;
+  border-radius:12px;
+  background:#4164b5;
+  color:white;
+  font-size:17px;
+  font-weight:bold;
+  cursor:pointer;
+}
+
+.item{
+  border:1px solid #e0e5ee;
+  border-radius:15px;
+  padding:15px;
+  margin-bottom:12px;
+  background:#fafbfe;
+}
+
+.item strong{
+  color:#4164b5;
+  font-size:18px;
+}
+
+.small{
+  color:#687386;
+  margin-top:5px;
+}
+
+.empty{
+  text-align:center;
+  color:#7b8494;
+  padding:25px 10px;
+}
+
+.admin{
+  margin-top:22px;
+  padding-top:20px;
+  border-top:1px solid #e1e5ec;
+}
+
+.danger{
+  background:#d9534f;
+  margin-top:10px;
+}
+
+footer{
+  text-align:center;
+  color:#777;
+  padding:25px 10px;
+  font-size:15px;
+}
+
+@media(max-width:600px){
+  header h1{
+    font-size:28px;
+  }
+
+  .grid{
+    gap:12px;
+  }
+
+  .card{
+    min-height:145px;
+    padding:25px 8px;
+  }
+
+  .card .icon{
+    font-size:42px;
+  }
+
+  .card h3{
+    font-size:20px;
+  }
+
+  .welcome h2{
+    font-size:28px;
+  }
+}
+</style>
 </head>
 
 <body>
 
-  <div class="header">
-    <h1>🏓 Pickleball Lào Cai</h1>
-    <p>Cộng đồng Pickleball Lào Cai</p>
-  </div>
+<header>
+  <h1>🏓 Pickleball Lào Cai</h1>
+  <p>Cộng đồng Pickleball Lào Cai</p>
+</header>
 
-  <div class="container">
+<div class="container">
+
+  <div id="home">
 
     <div class="welcome">
       <h2>Chào mừng bạn!</h2>
       <p>
-        Nền tảng quản lý thành viên, trình độ
-        và giải đấu Pickleball.
+        Nền tảng quản lý <b>thành viên, trình độ,
+        giải đấu và kết quả</b> Pickleball Lào Cai.
       </p>
     </div>
 
-    <div class="menu">
+    <div class="grid">
 
-      <button>👤<br>Thành viên</button>
+      <button class="card" onclick="openSection('members')">
+        <div class="icon">👤</div>
+        <h3>Thành viên</h3>
+      </button>
 
-      <button>📊<br>Chấm trình</button>
+      <button class="card" onclick="openSection('ranking')">
+        <div class="icon">📊</div>
+        <h3>Chấm trình</h3>
+      </button>
 
-      <button>🏆<br>Giải đấu</button>
+      <button class="card" onclick="openSection('tournaments')">
+        <div class="icon">🏆</div>
+        <h3>Giải đấu</h3>
+      </button>
 
-      <button>🎾<br>Kết quả</button>
+      <button class="card" onclick="openSection('results')">
+        <div class="icon">🎾</div>
+        <h3>Kết quả</h3>
+      </button>
 
+    </div>
+
+    <div class="admin">
+      <h3>⚙️ Quản trị</h3>
+      <p class="small">
+        Quản lý dữ liệu thành viên, giải đấu và kết quả.
+      </p>
+      <br>
+      <button class="primary" onclick="openSection('admin')">
+        Mở quản trị
+      </button>
     </div>
 
   </div>
 
-  <div class="footer">
-    Pickleball Lào Cai © 2026
+
+  <!-- THÀNH VIÊN -->
+
+  <div id="members" class="section">
+
+    <button class="back" onclick="goHome()">← Trang chủ</button>
+
+    <h2>👤 Thành viên</h2>
+
+    <input id="memberName" placeholder="Họ và tên">
+
+    <input id="memberPhone" placeholder="Số điện thoại">
+
+    <select id="memberLevel">
+      <option value="">Chọn trình độ</option>
+      <option>2.5</option>
+      <option>2.75</option>
+      <option>3.0</option>
+      <option>3.25</option>
+      <option>3.5</option>
+      <option>3.75</option>
+      <option>4.0</option>
+      <option>4.5+</option>
+    </select>
+
+    <button class="primary" onclick="addMember()">
+      + Thêm thành viên
+    </button>
+
+    <br><br>
+
+    <div id="memberList"></div>
+
   </div>
+
+
+  <!-- CHẤM TRÌNH -->
+
+  <div id="ranking" class="section">
+
+    <button class="back" onclick="goHome()">← Trang chủ</button>
+
+    <h2>📊 Chấm trình</h2>
+
+    <p class="small">
+      Danh sách thành viên và trình độ hiện tại.
+    </p>
+
+    <br>
+
+    <div id="rankingList"></div>
+
+  </div>
+
+
+  <!-- GIẢI ĐẤU -->
+
+  <div id="tournaments" class="section">
+
+    <button class="back" onclick="goHome()">← Trang chủ</button>
+
+    <h2>🏆 Giải đấu</h2>
+
+    <input id="tournamentName" placeholder="Tên giải đấu">
+
+    <input id="tournamentDate" type="date">
+
+    <input id="tournamentPlace" placeholder="Địa điểm">
+
+    <button class="primary" onclick="addTournament()">
+      + Tạo giải đấu
+    </button>
+
+    <br><br>
+
+    <div id="tournamentList"></div>
+
+  </div>
+
+
+  <!-- KẾT QUẢ -->
+
+  <div id="results" class="section">
+
+    <button class="back" onclick="goHome()">← Trang chủ</button>
+
+    <h2>🎾 Kết quả</h2>
+
+    <input id="resultTournament" placeholder="Tên giải đấu">
+
+    <input id="resultPlayer" placeholder="Tên VĐV / đội">
+
+    <input id="resultPosition" placeholder="Thứ hạng">
+
+    <button class="primary" onclick="addResult()">
+      + Thêm kết quả
+    </button>
+
+    <br><br>
+
+    <div id="resultList"></div>
+
+  </div>
+
+
+  <!-- QUẢN TRỊ -->
+
+  <div id="admin" class="section">
+
+    <button class="back" onclick="goHome()">← Trang chủ</button>
+
+    <h2>⚙️ Quản trị</h2>
+
+    <div class="item">
+      <strong>Thành viên</strong>
+      <div class="small" id="totalMembers">0 thành viên</div>
+    </div>
+
+    <div class="item">
+      <strong>Giải đấu</strong>
+      <div class="small" id="totalTournaments">0 giải đấu</div>
+    </div>
+
+    <div class="item">
+      <strong>Kết quả</strong>
+      <div class="small" id="totalResults">0 kết quả</div>
+    </div>
+
+    <button class="primary danger" onclick="clearAllData()">
+      Xoá toàn bộ dữ liệu trên thiết bị
+    </button>
+
+  </div>
+
+</div>
+
+<footer>
+  Pickleball Lào Cai © 2026
+</footer>
+
+
+<script>
+
+let members =
+  JSON.parse(localStorage.getItem("pickleball_members") || "[]");
+
+let tournaments =
+  JSON.parse(localStorage.getItem("pickleball_tournaments") || "[]");
+
+let results =
+  JSON.parse(localStorage.getItem("pickleball_results") || "[]");
+
+
+function saveData(){
+
+  localStorage.setItem(
+    "pickleball_members",
+    JSON.stringify(members)
+  );
+
+  localStorage.setItem(
+    "pickleball_tournaments",
+    JSON.stringify(tournaments)
+  );
+
+  localStorage.setItem(
+    "pickleball_results",
+    JSON.stringify(results)
+  );
+
+}
+
+
+function openSection(id){
+
+  document.getElementById("home").style.display="none";
+
+  document.querySelectorAll(".section")
+    .forEach(x=>x.classList.remove("active"));
+
+  document.getElementById(id)
+    .classList.add("active");
+
+  renderAll();
+
+  window.scrollTo({
+    top:0,
+    behavior:"smooth"
+  });
+
+}
+
+
+function goHome(){
+
+  document.querySelectorAll(".section")
+    .forEach(x=>x.classList.remove("active"));
+
+  document.getElementById("home").style.display="block";
+
+  window.scrollTo({
+    top:0,
+    behavior:"smooth"
+  });
+
+}
+
+
+function addMember(){
+
+  const name =
+    document.getElementById("memberName").value.trim();
+
+  const phone =
+    document.getElementById("memberPhone").value.trim();
+
+  const level =
+    document.getElementById("memberLevel").value;
+
+  if(!name){
+    alert("Vui lòng nhập họ tên.");
+    return;
+  }
+
+  members.push({
+    id:Date.now(),
+    name:name,
+    phone:phone,
+    level:level || "Chưa chấm",
+    created:new Date().toLocaleDateString("vi-VN")
+  });
+
+  saveData();
+
+  document.getElementById("memberName").value="";
+  document.getElementById("memberPhone").value="";
+  document.getElementById("memberLevel").value="";
+
+  renderAll();
+
+  alert("Đã thêm thành viên.");
+}
+
+
+function deleteMember(id){
+
+  if(!confirm("Xoá thành viên này?")) return;
+
+  members =
+    members.filter(x=>x.id!==id);
+
+  saveData();
+
+  renderAll();
+
+}
+
+
+function addTournament(){
+
+  const name =
+    document.getElementById("tournamentName").value.trim();
+
+  const date =
+    document.getElementById("tournamentDate").value;
+
+  const place =
+    document.getElementById("tournamentPlace").value.trim();
+
+  if(!name){
+    alert("Vui lòng nhập tên giải.");
+    return;
+  }
+
+  tournaments.push({
+    id:Date.now(),
+    name:name,
+    date:date,
+    place:place
+  });
+
+  saveData();
+
+  document.getElementById("tournamentName").value="";
+  document.getElementById("tournamentDate").value="";
+  document.getElementById("tournamentPlace").value="";
+
+  renderAll();
+
+  alert("Đã tạo giải đấu.");
+}
+
+
+function deleteTournament(id){
+
+  if(!confirm("Xoá giải đấu này?")) return;
+
+  tournaments =
+    tournaments.filter(x=>x.id!==id);
+
+  saveData();
+
+  renderAll();
+
+}
+
+
+function addResult(){
+
+  const tournament =
+    document.getElementById("resultTournament").value.trim();
+
+  const player =
+    document.getElementById("resultPlayer").value.trim();
+
+  const position =
+    document.getElementById("resultPosition").value.trim();
+
+  if(!tournament || !player){
+    alert("Vui lòng nhập đầy đủ thông tin.");
+    return;
+  }
+
+  results.push({
+    id:Date.now(),
+    tournament:tournament,
+    player:player,
+    position:position
+  });
+
+  saveData();
+
+  document.getElementById("resultTournament").value="";
+  document.getElementById("resultPlayer").value="";
+  document.getElementById("resultPosition").value="";
+
+  renderAll();
+
+  alert("Đã thêm kết quả.");
+}
+
+
+function deleteResult(id){
+
+  if(!confirm("Xoá kết quả này?")) return;
+
+  results =
+    results.filter(x=>x.id!==id);
+
+  saveData();
+
+  renderAll();
+
+}
+
+
+function renderMembers(){
+
+  const box =
+    document.getElementById("memberList");
+
+  if(!members.length){
+
+    box.innerHTML =
+      '<div class="empty">Chưa có thành viên.</div>';
+
+    return;
+  }
+
+  box.innerHTML =
+    members.map(m=>`
+
+      <div class="item">
+
+        <strong>${escapeHTML(m.name)}</strong>
+
+        <div class="small">
+          📱 ${escapeHTML(m.phone || "Chưa có SĐT")}
+        </div>
+
+        <div class="small">
+          ⭐ Trình độ: ${escapeHTML(m.level)}
+        </div>
+
+        <br>
+
+        <button
+          class="back"
+          onclick="deleteMember(${m.id})">
+          Xoá
+        </button>
+
+      </div>
+
+    `).join("");
+
+}
+
+
+function renderRanking(){
+
+  const box =
+    document.getElementById("rankingList");
+
+  if(!members.length){
+
+    box.innerHTML =
+      '<div class="empty">Chưa có dữ liệu trình độ.</div>';
+
+    return;
+  }
+
+  const sorted =
+    [...members].sort(
+      (a,b)=>
+        parseFloat(b.level) -
+        parseFloat(a.level)
+    );
+
+  box.innerHTML =
+    sorted.map((m,i)=>`
+
+      <div class="item">
+
+        <strong>
+          ${i+1}. ${escapeHTML(m.name)}
+        </strong>
+
+        <div class="small">
+          ⭐ Trình độ: ${escapeHTML(m.level)}
+        </div>
+
+      </div>
+
+    `).join("");
+
+}
+
+
+function renderTournaments(){
+
+  const box =
+    document.getElementById("tournamentList");
+
+  if(!tournaments.length){
+
+    box.innerHTML =
+      '<div class="empty">Chưa có giải đấu.</div>';
+
+    return;
+  }
+
+  box.innerHTML =
+    tournaments.map(t=>`
+
+      <div class="item">
+
+        <strong>${escapeHTML(t.name)}</strong>
+
+        <div class="small">
+          📅 ${escapeHTML(t.date || "Chưa xác định")}
+        </div>
+
+        <div class="small">
+          📍 ${escapeHTML(t.place || "Chưa xác định")}
+        </div>
+
+        <br>
+
+        <button
+          class="back"
+          onclick="deleteTournament(${t.id})">
+          Xoá
+        </button>
+
+      </div>
+
+    `).join("");
+
+}
+
+
+function renderResults(){
+
+  const box =
+    document.getElementById("resultList");
+
+  if(!results.length){
+
+    box.innerHTML =
+      '<div class="empty">Chưa có kết quả.</div>';
+
+    return;
+  }
+
+  box.innerHTML =
+    results.map(r=>`
+
+      <div class="item">
+
+        <strong>
+          🏆 ${escapeHTML(r.tournament)}
+        </strong>
+
+        <div class="small">
+          🎾 ${escapeHTML(r.player)}
+        </div>
+
+        <div class="small">
+          🥇 Thứ hạng: ${escapeHTML(r.position || "—")}
+        </div>
+
+        <br>
+
+        <button
+          class="back"
+          onclick="deleteResult(${r.id})">
+          Xoá
+        </button>
+
+      </div>
+
+    `).join("");
+
+}
+
+
+function renderAdmin(){
+
+  document.getElementById("totalMembers")
+    .textContent =
+    members.length+" thành viên";
+
+  document.getElementById("totalTournaments")
+    .textContent =
+    tournaments.length+" giải đấu";
+
+  document.getElementById("totalResults")
+    .textContent =
+    results.length+" kết quả";
+
+}
+
+
+function renderAll(){
+
+  renderMembers();
+  renderRanking();
+  renderTournaments();
+  renderResults();
+  renderAdmin();
+
+}
+
+
+function clearAllData(){
+
+  if(!confirm(
+    "CẢNH BÁO: Xoá toàn bộ dữ liệu trên thiết bị này?"
+  )) return;
+
+  members=[];
+  tournaments=[];
+  results=[];
+
+  saveData();
+  renderAll();
+
+  alert("Đã xoá dữ liệu.");
+
+}
+
+
+function escapeHTML(text){
+
+  return String(text)
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#039;");
+
+}
+
+
+renderAll();
+
+</script>
 
 </body>
 </html>
