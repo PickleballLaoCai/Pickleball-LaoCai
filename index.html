@@ -6835,226 +6835,1268 @@ async function openTournament(
    10. HIỂN THỊ PANEL GIẢI
  ========================================================= */
 
-async function renderTournamentPanel(){
+/* =========================================================
+   MỞ GIẢI — THÔNG TIN + ĐĂNG KÝ + LỊCH ĐẤU + KẾT QUẢ
+   + BẢNG XẾP HẠNG / BRACKET
+========================================================= */
+
+async function renderTournamentPanel() {
 
   const panel =
-    document.getElementById(
-      "tournamentPanel"
-    );
+    document.getElementById("tournamentPanel");
+
+  if (!panel) return;
 
 
-  if(!panel){
-
-    return;
-
-  }
-
-
-  if(!currentTournamentId){
+  if (!currentTournamentId) {
 
     panel.innerHTML = `
-
       <div class="empty">
-
-        Chọn một giải đấu để xem
-        và đăng ký thi đấu.
-
+        Chọn một giải đấu để xem và điều phối thi đấu.
       </div>
-
     `;
 
     return;
-
   }
 
 
   const tournament =
-    tournamentById(
-      currentTournamentId
+    tournaments.find(t =>
+      String(t.id) ===
+      String(currentTournamentId)
     );
 
 
-  if(!tournament){
+  if (!tournament) {
 
     panel.innerHTML = `
-
-      <div class="notice danger">
-
+      <div class="empty">
         Không tìm thấy giải đấu.
+      </div>
+    `;
+
+    return;
+  }
+
+
+  /* =====================================================
+     DỮ LIỆU GIẢI
+  ===================================================== */
+
+  const tournamentRegistrations =
+    registrations.filter(r =>
+      String(r.tournament_id) ===
+      String(tournament.id)
+    );
+
+
+  const tournamentMatches =
+    matches
+      .filter(m =>
+        String(m.tournament_id) ===
+        String(tournament.id)
+      )
+      .sort((a, b) => {
+
+        const ra =
+          String(a.round_name || "");
+
+        const rb =
+          String(b.round_name || "");
+
+        const roundCompare =
+          ra.localeCompare(
+            rb,
+            undefined,
+            { numeric: true }
+          );
+
+        if (roundCompare !== 0) {
+          return roundCompare;
+        }
+
+        return (
+          Number(a.match_no || 0) -
+          Number(b.match_no || 0)
+        );
+
+      });
+
+
+  const completedMatches =
+    tournamentMatches.filter(m =>
+      m.status === "completed" ||
+      m.status === "finished"
+    );
+
+
+  const pendingMatches =
+    tournamentMatches.filter(m =>
+      m.status !== "completed" &&
+      m.status !== "finished"
+    );
+
+
+  /* =====================================================
+     THÔNG TIN GIẢI
+  ===================================================== */
+
+  const competitionText =
+    competitionTypeText(
+      tournament.competition_type
+    );
+
+
+  const formatText =
+    tournamentFormatText(
+      tournament.format
+    );
+
+
+  /* =====================================================
+     HTML DANH SÁCH ĐĂNG KÝ
+  ===================================================== */
+
+  let registrationHtml = "";
+
+
+  if (!tournamentRegistrations.length) {
+
+    registrationHtml = `
+      <div class="empty">
+        Chưa có người chơi/đội đăng ký.
+      </div>
+    `;
+
+  } else {
+
+    registrationHtml = `
+
+      <div class="table-wrap">
+
+        <table>
+
+          <thead>
+
+            <tr>
+
+              <th>#</th>
+
+              <th>
+                ${
+                  tournament.competition_type ===
+                  "doubles"
+                    ? "Đội"
+                    : "Người chơi"
+                }
+              </th>
+
+              <th>Trình</th>
+
+              <th>Trạng thái</th>
+
+            </tr>
+
+          </thead>
+
+
+          <tbody>
+
+            ${
+              tournamentRegistrations
+                .map((reg, index) => {
+
+                  const member1 =
+                    members.find(m =>
+                      String(m.id) ===
+                      String(reg.member_id)
+                    );
+
+
+                  const member2 =
+                    members.find(m =>
+                      String(m.id) ===
+                      String(reg.member2_id)
+                    );
+
+
+                  let ratingText = "—";
+
+
+                  if (
+                    member1 &&
+                    member2
+                  ) {
+
+                    const r1 =
+                      Number(member1.rating || 1);
+
+                    const r2 =
+                      Number(member2.rating || 1);
+
+                    ratingText =
+                      formatRating(
+                        (r1 + r2) / 2
+                      );
+
+                  } else if (member1) {
+
+                    ratingText =
+                      formatRating(
+                        member1.rating
+                      );
+
+                  }
+
+
+                  return `
+
+                    <tr>
+
+                      <td>
+                        ${index + 1}
+                      </td>
+
+
+                      <td>
+
+                        <strong>
+                          ${escapeHtml(
+                            getTeamDisplayName(reg)
+                          )}
+                        </strong>
+
+
+                        ${
+                          tournament.competition_type ===
+                          "doubles" &&
+                          member1 &&
+                          member2
+                            ? `
+                              <div class="muted">
+                                ${escapeHtml(
+                                  member1.full_name
+                                )}
+                                &amp;
+                                ${escapeHtml(
+                                  member2.full_name
+                                )}
+                              </div>
+                            `
+                            : ""
+                        }
+
+                      </td>
+
+
+                      <td>
+                        ${ratingText}
+                      </td>
+
+
+                      <td>
+
+                        <span class="badge">
+                          ${escapeHtml(
+                            reg.status ||
+                            "registered"
+                          )}
+                        </span>
+
+                      </td>
+
+                    </tr>
+
+                  `;
+
+                })
+                .join("")
+            }
+
+          </tbody>
+
+        </table>
 
       </div>
 
     `;
 
-    return;
+  }
+
+
+  /* =====================================================
+     HTML LỊCH THI ĐẤU
+  ===================================================== */
+
+  let scheduleHtml = "";
+
+
+  if (!tournamentMatches.length) {
+
+    scheduleHtml = `
+
+      <div class="empty">
+
+        Chưa có lịch thi đấu.
+
+        <div class="muted" style="margin-top:6px;">
+          Sau khi đủ người/đội, hệ thống sẽ tạo
+          các trận theo thể thức của giải.
+        </div>
+
+      </div>
+
+    `;
+
+  } else {
+
+    scheduleHtml = `
+
+      <div class="match-summary">
+
+        <span class="chip">
+          Tổng ${tournamentMatches.length} trận
+        </span>
+
+        <span class="chip">
+          ${completedMatches.length} đã đấu
+        </span>
+
+        <span class="chip">
+          ${pendingMatches.length} chưa đấu
+        </span>
+
+      </div>
+
+
+      <div class="match-list">
+
+        ${
+          tournamentMatches
+            .map(match => {
+
+              const sideA =
+                getMatchSideName(
+                  match.team_a
+                );
+
+
+              const sideB =
+                getMatchSideName(
+                  match.team_b
+                );
+
+
+              const isCompleted =
+                match.status === "completed" ||
+                match.status === "finished";
+
+
+              const scoreA =
+                match.score_a !== null &&
+                match.score_a !== undefined
+                  ? match.score_a
+                  : "—";
+
+
+              const scoreB =
+                match.score_b !== null &&
+                match.score_b !== undefined
+                  ? match.score_b
+                  : "—";
+
+
+              return `
+
+                <div class="match-card">
+
+                  <div class="match-top">
+
+                    <div>
+
+                      <strong>
+                        ${escapeHtml(
+                          match.round_name ||
+                          "Vòng đấu"
+                        )}
+                      </strong>
+
+                      ${
+                        match.match_no
+                          ? `
+                            <span class="muted">
+                              · Trận
+                              ${escapeHtml(
+                                String(
+                                  match.match_no
+                                )
+                              )}
+                            </span>
+                          `
+                          : ""
+                      }
+
+                    </div>
+
+
+                    <span class="badge">
+                      ${
+                        isCompleted
+                          ? "Đã kết thúc"
+                          : "Chưa đấu"
+                      }
+                    </span>
+
+                  </div>
+
+
+                  <div class="match-body">
+
+                    <div class="team">
+
+                      <div class="team-name">
+                        ${escapeHtml(sideA)}
+                      </div>
+
+                      <div class="score">
+                        ${escapeHtml(
+                          String(scoreA)
+                        )}
+                      </div>
+
+                    </div>
+
+
+                    <div class="vs">
+                      VS
+                    </div>
+
+
+                    <div class="team">
+
+                      <div class="team-name">
+                        ${escapeHtml(sideB)}
+                      </div>
+
+                      <div class="score">
+                        ${escapeHtml(
+                          String(scoreB)
+                        )}
+                      </div>
+
+                    </div>
+
+                  </div>
+
+
+                  <div class="muted">
+
+                    ${
+                      match.court
+                        ? `
+                          Sân
+                          ${escapeHtml(
+                            String(match.court)
+                          )}
+                        `
+                        : ""
+                    }
+
+
+                    ${
+                      match.scheduled_at
+                        ? `
+                          ${
+                            match.court
+                              ? " · "
+                              : ""
+                          }
+
+                          ${formatDateTime(
+                            match.scheduled_at
+                          )}
+                        `
+                        : ""
+                    }
+
+                  </div>
+
+
+                  ${
+                    match.notes
+                      ? `
+                        <div
+                          class="muted"
+                          style="margin-top:6px;">
+                          ${escapeHtml(
+                            match.notes
+                          )}
+                        </div>
+                      `
+                      : ""
+                  }
+
+
+                  ${
+                    !isCompleted &&
+                    match.team_a &&
+                    match.team_b
+                      ? `
+
+                        <div
+                          class="row-actions">
+
+                          <button
+                            class="btn primary"
+                            onclick="openMatchResultModal('${match.id}')">
+
+                            Nhập kết quả
+
+                          </button>
+
+                        </div>
+
+                      `
+                      : ""
+                  }
+
+                </div>
+
+              `;
+
+            })
+            .join("")
+        }
+
+      </div>
+
+    `;
 
   }
 
 
-  const type =
-    tournament.competition_type
-    ||
-    "singles";
+  /* =====================================================
+     BẢNG XẾP HẠNG CHIA BẢNG
+  ===================================================== */
+
+  let standingsHtml = "";
 
 
-  const format =
-    tournament.format
-    ||
-    "double_elimination";
+  if (
+    tournament.format ===
+    "group_stage"
+  ) {
+
+    const standings =
+      calculateStandings(
+        tournament.id
+      );
 
 
-  const typeText =
-    type === "doubles"
-      ? "Đánh đôi"
-      : "Đánh đơn";
+    standingsHtml = `
+
+      <h3>
+        📊 Bảng xếp hạng
+      </h3>
 
 
-  const formatText =
-    format === "group_stage"
-      ? "Chia bảng"
-      : "Loại trực tiếp — Nhánh thắng / Nhánh thua";
+      ${
+        standings.length
+          ? `
+
+            <div class="table-wrap">
+
+              <table>
+
+                <thead>
+
+                  <tr>
+
+                    <th>#</th>
+
+                    <th>
+                      Người/Đội
+                    </th>
+
+                    <th>Tr</th>
+
+                    <th>T</th>
+
+                    <th>B</th>
+
+                    <th>Điểm</th>
+
+                    <th>HS</th>
+
+                  </tr>
+
+                </thead>
 
 
-  const teams =
-    buildTeams(
-      tournament.id
-    );
+                <tbody>
 
+                  ${
+                    standings
+                      .map((item, index) => `
+
+                        <tr>
+
+                          <td>
+                            ${index + 1}
+                          </td>
+
+                          <td>
+                            <strong>
+                              ${escapeHtml(
+                                item.name
+                              )}
+                            </strong>
+                          </td>
+
+                          <td>
+                            ${item.played}
+                          </td>
+
+                          <td>
+                            ${item.wins}
+                          </td>
+
+                          <td>
+                            ${item.losses}
+                          </td>
+
+                          <td>
+                            <strong>
+                              ${item.points}
+                            </strong>
+                          </td>
+
+                          <td>
+                            ${
+                              item.diff > 0
+                                ? "+"
+                                : ""
+                            }
+                            ${item.diff}
+                          </td>
+
+                        </tr>
+
+                      `)
+                      .join("")
+                  }
+
+                </tbody>
+
+              </table>
+
+            </div>
+
+          `
+          : `
+            <div class="empty">
+              Chưa có dữ liệu xếp hạng.
+            </div>
+          `
+      }
+
+    `;
+
+  }
+
+
+  /* =====================================================
+     BRACKET LOẠI TRỰC TIẾP
+  ===================================================== */
+
+  let bracketHtml = "";
+
+
+  if (
+    tournament.format ===
+    "double_elimination"
+  ) {
+
+    const winners =
+      tournamentMatches.filter(m => {
+
+        const name =
+          String(
+            m.round_name || ""
+          ).toLowerCase();
+
+        return (
+          name.includes("winner") ||
+          name.includes("wb")
+        );
+
+      });
+
+
+    const losers =
+      tournamentMatches.filter(m => {
+
+        const name =
+          String(
+            m.round_name || ""
+          ).toLowerCase();
+
+        return (
+          name.includes("loser") ||
+          name.includes("lb")
+        );
+
+      });
+
+
+    const grandFinal =
+      tournamentMatches.filter(m =>
+        String(
+          m.round_name || ""
+        )
+          .toLowerCase()
+          .includes("grand final")
+      );
+
+
+    function bracketMatchHtml(match) {
+
+      const sideA =
+        getMatchSideName(
+          match.team_a
+        );
+
+
+      const sideB =
+        getMatchSideName(
+          match.team_b
+        );
+
+
+      const completed =
+        match.status === "completed" ||
+        match.status === "finished";
+
+
+      return `
+
+        <div class="match-card">
+
+          <div class="match-top">
+
+            <strong>
+              ${escapeHtml(
+                match.round_name ||
+                "Vòng đấu"
+              )}
+            </strong>
+
+            <span class="badge">
+              ${
+                completed
+                  ? "Đã đấu"
+                  : "Chưa đấu"
+              }
+            </span>
+
+          </div>
+
+
+          <div class="match-body">
+
+            <div class="team">
+
+              <div class="team-name">
+                ${escapeHtml(sideA)}
+              </div>
+
+              <div class="score">
+                ${
+                  match.score_a ??
+                  "—"
+                }
+              </div>
+
+            </div>
+
+
+            <div class="vs">
+              VS
+            </div>
+
+
+            <div class="team">
+
+              <div class="team-name">
+                ${escapeHtml(sideB)}
+              </div>
+
+              <div class="score">
+                ${
+                  match.score_b ??
+                  "—"
+                }
+              </div>
+
+            </div>
+
+          </div>
+
+
+          ${
+            !completed &&
+            match.team_a &&
+            match.team_b
+              ? `
+                <div class="row-actions">
+
+                  <button
+                    class="btn primary"
+                    onclick="openMatchResultModal('${match.id}')">
+
+                    Nhập kết quả
+
+                  </button>
+
+                </div>
+              `
+              : ""
+          }
+
+        </div>
+
+      `;
+
+    }
+
+
+    bracketHtml = `
+
+      <div class="bracket-grid">
+
+        <div>
+
+          <h3>
+            🏆 Winners Bracket
+          </h3>
+
+
+          ${
+            winners.length
+              ? winners
+                  .map(
+                    bracketMatchHtml
+                  )
+                  .join("")
+              : `
+                <div class="empty">
+                  Chưa có trận nhánh thắng.
+                </div>
+              `
+          }
+
+        </div>
+
+
+        <div>
+
+          <h3>
+            🔥 Losers Bracket
+          </h3>
+
+
+          ${
+            losers.length
+              ? losers
+                  .map(
+                    bracketMatchHtml
+                  )
+                  .join("")
+              : `
+                <div class="empty">
+                  Chưa có trận nhánh thua.
+                </div>
+              `
+          }
+
+        </div>
+
+      </div>
+
+
+      <div style="margin-top:18px;">
+
+        <h3>
+          🏆 Grand Final
+        </h3>
+
+
+        ${
+          grandFinal.length
+            ? grandFinal
+                .map(
+                  bracketMatchHtml
+                )
+                .join("")
+            : `
+              <div class="empty">
+                Grand Final chưa được tạo.
+              </div>
+            `
+        }
+
+      </div>
+
+    `;
+
+  }
+
+
+  /* =====================================================
+     RENDER TOÀN BỘ MỘT GIẢI
+  ===================================================== */
 
   panel.innerHTML = `
 
-    <div class="notice">
+    <div class="tournament-detail">
 
-      <b>
-        ${esc(tournament.name)}
-      </b>
+      <!-- THÔNG TIN GIẢI -->
 
-      <br>
+      <div class="card">
 
-      ${esc(typeText)}
+        <div class="tournament-card-head">
 
-      ·
+          <div>
 
-      ${esc(formatText)}
+            <h2>
+              🏆 ${escapeHtml(
+                tournament.name ||
+                "Giải đấu"
+              )}
+            </h2>
 
-    </div>
+            <div class="muted">
 
+              ${formatDate(
+                tournament.date
+              )}
 
-    <div class="stat-grid">
+              ${
+                tournament.place
+                  ? `
+                    ·
+                    ${escapeHtml(
+                      tournament.place
+                    )}
+                  `
+                  : ""
+              }
 
-      <div class="stat">
+            </div>
 
-        <strong>
-          ${teams.length}
-        </strong>
-
-        <span>
-          ${type === "doubles"
-            ? "Đội"
-            : "Người"}
-        </span>
-
-      </div>
-
-
-      <div class="stat">
-
-        <strong>
-          ${registrationsForTournament(
-            tournament.id
-          ).length}
-        </strong>
-
-        <span>
-          Đăng ký
-        </span>
-
-      </div>
+          </div>
 
 
-      <div class="stat">
+          <span class="badge">
 
-        <strong>
-          ${
-            tournament.max_teams
-            ||
-            "∞"
-          }
-        </strong>
+            ${escapeHtml(
+              tournamentStatusText(
+                tournament.status
+              )
+            )}
 
-        <span>
-          Tối đa
-        </span>
+          </span>
 
-      </div>
+        </div>
 
 
-      <div class="stat">
+        <div class="chips">
 
-        <strong>
+          <span class="chip">
+            ${escapeHtml(
+              competitionText
+            )}
+          </span>
+
+          <span class="chip">
+            ${escapeHtml(
+              formatText
+            )}
+          </span>
+
+
           ${
             tournament.rating_limit
-            ||
-            "∞"
+              ? `
+                <span class="chip">
+                  Trình ≤
+                  ${formatRating(
+                    tournament.rating_limit
+                  )}
+                </span>
+              `
+              : ""
           }
-        </strong>
 
-        <span>
-          Giới hạn trình
-        </span>
+
+          <span class="chip">
+            ${tournamentRegistrations.length}
+            ${
+              tournament.competition_type ===
+              "doubles"
+                ? " đội"
+                : " người"
+            }
+          </span>
+
+
+          <span class="chip">
+            ${completedMatches.length}
+            / ${tournamentMatches.length}
+            trận
+          </span>
+
+        </div>
+
+
+        ${
+          tournament.description
+            ? `
+              <div
+                class="muted"
+                style="margin-top:12px;">
+
+                ${escapeHtml(
+                  tournament.description
+                )}
+
+              </div>
+            `
+            : ""
+        }
+
+
+        <div class="row-actions">
+
+          <button
+            class="btn primary"
+            onclick="openRegistrationModal('${tournament.id}')">
+
+            + Đăng ký
+          </button>
+
+        </div>
+
+      </div>
+
+
+      <!-- DANH SÁCH ĐĂNG KÝ -->
+
+      <div
+        class="card"
+        style="margin-top:18px;">
+
+        <div class="section-title">
+
+          👥 Danh sách đăng ký
+
+          <span class="chip">
+            ${tournamentRegistrations.length}
+          </span>
+
+        </div>
+
+
+        ${registrationHtml}
+
+      </div>
+
+
+      <!-- LỊCH THI ĐẤU -->
+
+      <div
+        class="card"
+        style="margin-top:18px;">
+
+        <div class="section-title">
+
+          📅 Lịch thi đấu
+
+        </div>
+
+
+        ${scheduleHtml}
+
+      </div>
+
+
+      <!-- BẢNG / BRACKET -->
+
+      <div
+        class="card"
+        style="margin-top:18px;">
+
+        <div class="section-title">
+
+          ${
+            tournament.format ===
+            "group_stage"
+              ? "📊 Bảng đấu & xếp hạng"
+              : "🏆 Bảng đấu / Bracket"
+          }
+
+        </div>
+
+
+        ${
+          tournament.format ===
+          "group_stage"
+            ? standingsHtml
+            : bracketHtml
+        }
+
+      </div>
+
+
+      <!-- KẾT QUẢ -->
+
+      <div
+        class="card"
+        style="margin-top:18px;">
+
+        <div class="section-title">
+
+          📋 Kết quả trận đấu
+
+        </div>
+
+
+        ${
+          completedMatches.length
+            ? `
+
+              <div class="match-list">
+
+                ${
+                  completedMatches
+                    .map(match => {
+
+                      const sideA =
+                        getMatchSideName(
+                          match.team_a
+                        );
+
+
+                      const sideB =
+                        getMatchSideName(
+                          match.team_b
+                        );
+
+
+                      return `
+
+                        <div
+                          class="match-card">
+
+                          <div
+                            class="match-top">
+
+                            <strong>
+                              ${escapeHtml(
+                                match.round_name ||
+                                "Vòng đấu"
+                              )}
+                            </strong>
+
+                            <span class="badge">
+                              Đã kết thúc
+                            </span>
+
+                          </div>
+
+
+                          <div
+                            class="match-body">
+
+                            <div
+                              class="team">
+
+                              <div
+                                class="team-name">
+
+                                ${escapeHtml(
+                                  sideA
+                                )}
+
+                              </div>
+
+                              <div
+                                class="score">
+
+                                ${
+                                  match.score_a ??
+                                  "—"
+                                }
+
+                              </div>
+
+                            </div>
+
+
+                            <div class="vs">
+                              VS
+                            </div>
+
+
+                            <div
+                              class="team">
+
+                              <div
+                                class="team-name">
+
+                                ${escapeHtml(
+                                  sideB
+                                )}
+
+                              </div>
+
+                              <div
+                                class="score">
+
+                                ${
+                                  match.score_b ??
+                                  "—"
+                                }
+
+                              </div>
+
+                            </div>
+
+                          </div>
+
+                        </div>
+
+                      `;
+
+                    })
+                    .join("")
+                }
+
+              </div>
+
+            `
+            : `
+              <div class="empty">
+                Chưa có trận nào hoàn thành.
+              </div>
+            `
+        }
 
       </div>
 
     </div>
 
-
-    <div
-      class="actions"
-      style="margin-top:15px"
-    >
-
-      <button
-        class="btn btn-primary"
-        onclick="openRegistrationModal('${esc(tournament.id)}')"
-      >
-        + Đăng ký ${type === "doubles"
-          ? "đôi"
-          : "thi đấu"}
-      </button>
-
-
-      <button
-        class="btn btn-secondary"
-        onclick="refreshTournamentData()"
-      >
-        ↻ Làm mới
-      </button>
-
-    </div>
-
-
-    <div
-      id="registrationArea"
-      style="margin-top:18px"
-    ></div>
-
-
-    <div
-      id="competitionArea"
-      style="margin-top:18px"
-    ></div>
-
   `;
-
-
-  renderTournamentRegistrations(
-    tournament.id
-  );
-
-
-  await renderCompetitionStructure(
-    tournament.id
-  );
 
 }
 
