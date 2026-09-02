@@ -7194,351 +7194,274 @@ function renderTournamentRegistrations(
    13. MODAL ĐĂNG KÝ
  ========================================================= */
 
-async function openRegistrationModal(
-  tournamentId
-){
+function openRegistrationModal(tournamentId) {
 
-  const tournament =
-    tournamentById(
-      tournamentId
-    );
-
-
-  if(!tournament){
-
-    alert(
-      "Không tìm thấy giải."
-    );
-
-    return;
-
-  }
-
-
-  const type =
-    tournament.competition_type
-    ||
-    "singles";
-
-
-  const existing =
-    registrationsForTournament(
-      tournamentId
-    );
-
-
-  const usedMemberIds =
-    new Set();
-
-
-  existing.forEach(
-    registration => {
-
-      getRegistrationMembers(
-        registration
-      )
-      .forEach(
-        id =>
-          usedMemberIds.add(
-            String(id)
-          )
-      );
-
-    }
+  const tournament = tournaments.find(t =>
+    String(t.id) === String(tournamentId)
   );
 
-
-  const available =
-    members.filter(
-      member =>
-
-        !usedMemberIds.has(
-          String(member.id)
-        )
-
-    );
-
-
-  if(
-    type === "doubles"
-    &&
-    available.length < 2
-  ){
-
-    alert(
-      "Không đủ thành viên chưa đăng ký để tạo một đôi."
-    );
-
+  if (!tournament) {
+    showToast("Không tìm thấy giải đấu.");
     return;
-
   }
 
+  const isDoubles =
+    tournament.competition_type === "doubles";
 
-  if(
-    type === "singles"
-    &&
-    available.length < 1
-  ){
+  openModal(`
 
-    alert(
-      "Không còn thành viên trống để đăng ký."
-    );
+    <div class="modal-head">
 
-    return;
+      <div>
+        <h3>
+          ${isDoubles ? "Đăng ký đôi" : "Đăng ký đơn"}
+        </h3>
 
-  }
-
-
-  let html = `
-
-    <form
-      id="registrationForm"
-      data-tournament="${esc(tournamentId)}"
-    >
-
-  `;
-
-
-  if(type === "singles"){
-
-    html += `
-
-      <div class="field">
-
-        <label>
-          Chọn thành viên *
-        </label>
-
-        <select
-          id="registrationMember1"
-          required
-        >
-
-          <option value="">
-            -- Chọn thành viên --
-          </option>
-
+        <div class="muted">
           ${
-            available
-              .map(
-                member => `
-
-                  <option
-                    value="${esc(member.id)}"
-                  >
-
-                    ${esc(
-                      member.full_name
-                    )}
-
-                    — trình
-                    ${formatRating(
-                      member.rating
-                    )}
-
-                  </option>
-
-                `
-              )
-              .join("")
+            isDoubles
+              ? "Nhập số điện thoại của 2 thành viên."
+              : "Nhập số điện thoại của thành viên."
           }
-
-        </select>
-
+        </div>
       </div>
 
-    `;
+      <button
+        class="icon-btn"
+        onclick="closeModal()">
+        ✕
+      </button>
 
-  }else{
-
-    html += `
-
-      <div class="notice">
-
-        Đăng ký đôi cần
-        <b>2 thành viên</b>.
-
-        <br>
-
-        Mỗi thành viên chỉ được đăng ký
-        một đội trong giải này.
-
-      </div>
+    </div>
 
 
-      <div class="field">
+    <div class="notice">
 
-        <label>
-          Thành viên 1 *
-        </label>
+      ${
+        isDoubles
+          ? `
+            <strong>Đăng ký đội đôi</strong><br>
+            Mỗi thành viên chỉ được đăng ký một đội
+            trong cùng một giải.
+          `
+          : `
+            <strong>Đăng ký thi đấu đơn</strong><br>
+            Nhập số điện thoại để tìm thành viên.
+          `
+      }
 
-        <select
-          id="registrationMember1"
-          required
-        >
-
-          <option value="">
-            -- Chọn thành viên --
-          </option>
-
-          ${
-            available
-              .map(
-                member => `
-
-                  <option
-                    value="${esc(member.id)}"
-                  >
-
-                    ${esc(
-                      member.full_name
-                    )}
-
-                    — trình
-                    ${formatRating(
-                      member.rating
-                    )}
-
-                  </option>
-
-                `
-              )
-              .join("")
-          }
-
-        </select>
-
-      </div>
+    </div>
 
 
-      <div class="field">
+    <!-- THÀNH VIÊN 1 -->
 
-        <label>
-          Thành viên 2 *
-        </label>
+    <div class="form-group">
 
-        <select
-          id="registrationMember2"
-          required
-        >
+      <label>
+        Số điện thoại thành viên 1 *
+      </label>
 
-          <option value="">
-            -- Chọn thành viên --
-          </option>
-
-          ${
-            available
-              .map(
-                member => `
-
-                  <option
-                    value="${esc(member.id)}"
-                  >
-
-                    ${esc(
-                      member.full_name
-                    )}
-
-                    — trình
-                    ${formatRating(
-                      member.rating
-                    )}
-
-                  </option>
-
-                `
-              )
-              .join("")
-          }
-
-        </select>
-
-      </div>
-
-
-      <div class="field">
-
-        <label>
-          Tên đội
-        </label>
-
-        <input
-          id="registrationTeamName"
-          placeholder="Ví dụ: Lào Cai Pickleball 01"
-        >
-
-      </div>
-
-    `;
-
-  }
-
-
-  html += `
+      <input
+        id="regPhone1"
+        type="tel"
+        inputmode="numeric"
+        autocomplete="off"
+        placeholder="Nhập số điện thoại..."
+        oninput="lookupRegistrationMember(1)"
+      />
 
       <div
-        id="registrationError"
-        class="notice danger hidden"
-      ></div>
-
-
-      <div class="actions">
-
-        <button
-          type="button"
-          class="btn btn-secondary"
-          onclick="closeModal()"
-        >
-          Huỷ
-        </button>
-
-
-        <button
-          type="submit"
-          class="btn btn-primary"
-        >
-          ✓ Xác nhận đăng ký
-        </button>
-
+        id="regMemberResult1"
+        class="member-search-result">
+        Nhập số điện thoại để tìm thành viên.
       </div>
 
+    </div>
 
-    </form>
+
+    ${
+      isDoubles
+        ? `
+
+          <!-- THÀNH VIÊN 2 -->
+
+          <div class="form-group">
+
+            <label>
+              Số điện thoại thành viên 2 *
+            </label>
+
+            <input
+              id="regPhone2"
+              type="tel"
+              inputmode="numeric"
+              autocomplete="off"
+              placeholder="Nhập số điện thoại..."
+              oninput="lookupRegistrationMember(2)"
+            />
+
+            <div
+              id="regMemberResult2"
+              class="member-search-result">
+              Nhập số điện thoại để tìm thành viên.
+            </div>
+
+          </div>
+
+
+          <div class="form-group">
+
+            <label>
+              Tên đội
+            </label>
+
+            <input
+              id="regTeamName"
+              type="text"
+              placeholder="Ví dụ: Lào Cai Pickleball 01"
+            />
+
+          </div>
+
+        `
+        : ""
+    }
+
+
+    <div
+      id="registrationError"
+      class="error-box"
+      style="display:none;">
+    </div>
+
+
+    <div class="row-actions">
+
+      <button
+        class="btn"
+        onclick="closeModal()">
+        Huỷ
+      </button>
+
+      <button
+        class="btn primary"
+        onclick="submitRegistration('${tournament.id}')">
+        ✓ Xác nhận đăng ký
+      </button>
+
+    </div>
+
+  `);
+
+}
+/* =========================================================
+   TÌM THÀNH VIÊN BẰNG SỐ ĐIỆN THOẠI
+========================================================= */
+
+function normalizePhone(phone) {
+
+  return String(phone || "")
+    .replace(/\D/g, "");
+}
+
+
+function findMemberByPhone(phone) {
+
+  const normalized =
+    normalizePhone(phone);
+
+  if (!normalized) return null;
+
+  return members.find(member => {
+
+    const memberPhone =
+      normalizePhone(member.phone);
+
+    return (
+      memberPhone === normalized
+    );
+
+  }) || null;
+
+}
+
+
+function lookupRegistrationMember(slot) {
+
+  const input =
+    document.getElementById(
+      "regPhone" + slot
+    );
+
+  const result =
+    document.getElementById(
+      "regMemberResult" + slot
+    );
+
+  if (!input || !result) return;
+
+  const phone =
+    input.value.trim();
+
+  if (!phone) {
+
+    result.innerHTML = `
+      Nhập số điện thoại để tìm thành viên.
+    `;
+
+    result.className =
+      "member-search-result";
+
+    return;
+
+  }
+
+  const member =
+    findMemberByPhone(phone);
+
+  if (!member) {
+
+    result.innerHTML = `
+      <strong>Không tìm thấy thành viên.</strong>
+      <div class="muted">
+        Kiểm tra lại số điện thoại hoặc
+        thêm thành viên trước.
+      </div>
+    `;
+
+    result.className =
+      "member-search-result not-found";
+
+    return;
+
+  }
+
+  result.innerHTML = `
+
+    <strong>
+      ✓ ${escapeHtml(member.full_name || "Không có tên")}
+    </strong>
+
+    <div class="muted">
+
+      Trình:
+      <strong>
+        ${formatRating(member.rating)}
+      </strong>
+
+      ${
+        member.club
+          ? " · CLB " +
+            escapeHtml(member.club)
+          : ""
+      }
+
+    </div>
 
   `;
 
-
-  openModal(
-    type === "doubles"
-      ? "Đăng ký đôi"
-      : "Đăng ký thi đấu",
-    html
-  );
-
-
-  document
-    .getElementById(
-      "registrationForm"
-    )
-    ?.addEventListener(
-      "submit",
-      submitRegistration
-    );
-
-
-  if(type === "doubles"){
-
-    document
-      .getElementById(
-        "registrationMember1"
-      )
-      ?.addEventListener(
-        "change",
-        syncPartnerOptions
-      );
-
-
-  }
+  result.className =
+    "member-search-result found";
 
 }
 
@@ -7608,67 +7531,39 @@ function syncPartnerOptions(){
    15. GỬI ĐĂNG KÝ
  ========================================================= */
 
-async function submitRegistration(
-  event
-){
-
-  event.preventDefault();
-
-
-  const form =
-    event.currentTarget;
-
-
-  const tournamentId =
-    form.dataset.tournament;
-
+async function submitRegistration(tournamentId) {
 
   const tournament =
-    tournamentById(
-      tournamentId
+    tournaments.find(t =>
+      String(t.id) === String(tournamentId)
     );
 
+  if (!tournament) {
 
-  if(!tournament){
+    showToast(
+      "Không tìm thấy giải đấu."
+    );
 
     return;
-
   }
 
 
-  const type =
-    tournament.competition_type
-    ||
-    "singles";
-
-
-  const member1 =
-    document
-      .getElementById(
-        "registrationMember1"
-      )
-      ?.value;
-
-
-  const member2 =
-    document
-      .getElementById(
-        "registrationMember2"
-      )
+  const phone1 =
+    document.getElementById("regPhone1")
       ?.value
-      ||
-      null;
+      .trim() || "";
+
+
+  const phone2 =
+    document.getElementById("regPhone2")
+      ?.value
+      .trim() || "";
 
 
   const teamName =
-    document
-      .getElementById(
-        "registrationTeamName"
-      )
+    document.getElementById("regTeamName")
       ?.value
-      ?.trim()
-      ||
-      null;
+      .trim() || "";
 
 
   const errorBox =
@@ -7677,199 +7572,236 @@ async function submitRegistration(
     );
 
 
-  if(!member1){
+  function showRegistrationError(message) {
 
-    if(errorBox){
+    if (errorBox) {
 
-      errorBox.textContent =
-        "Vui lòng chọn thành viên.";
+      errorBox.style.display =
+        "block";
 
-      errorBox.classList.remove(
-        "hidden"
-      );
+      errorBox.innerHTML =
+        escapeHtml(message);
 
-    }
+    } else {
 
-    return;
-
-  }
-
-
-  if(
-    type === "doubles"
-    &&
-    (
-      !member2
-      ||
-      String(member1)
-      ===
-      String(member2)
-    )
-  ){
-
-    if(errorBox){
-
-      errorBox.textContent =
-        "Đánh đôi phải chọn 2 thành viên khác nhau.";
-
-      errorBox.classList.remove(
-        "hidden"
-      );
+      showToast(message);
 
     }
-
-    return;
 
   }
 
 
   /*
-    Kiểm tra một thành viên
-    không đăng ký hai lần.
-  */
+   * Tìm thành viên
+   */
 
-  const currentRegs =
-    registrationsForTournament(
-      tournamentId
+  const member1 =
+    findMemberByPhone(phone1);
+
+
+  if (!member1) {
+
+    showRegistrationError(
+      "Không tìm thấy thành viên 1. Vui lòng nhập đúng số điện thoại."
+    );
+
+    return;
+  }
+
+
+  let member2 = null;
+
+
+  if (
+    tournament.competition_type ===
+    "doubles"
+  ) {
+
+    member2 =
+      findMemberByPhone(phone2);
+
+
+    if (!member2) {
+
+      showRegistrationError(
+        "Không tìm thấy thành viên 2. Vui lòng nhập đúng số điện thoại."
+      );
+
+      return;
+    }
+
+
+    /*
+     * Không được đăng ký chính mình
+     */
+
+    if (
+      String(member1.id) ===
+      String(member2.id)
+    ) {
+
+      showRegistrationError(
+        "Thành viên 1 và thành viên 2 phải là hai người khác nhau."
+      );
+
+      return;
+    }
+
+  }
+
+
+  /*
+   * Tải lại danh sách đăng ký mới nhất
+   */
+
+  const {
+    data: currentRegistrations,
+    error: registrationLoadError
+  } = await supabaseClient
+    .from("tournament_registrations")
+    .select("*")
+    .eq(
+      "tournament_id",
+      tournament.id
     );
 
 
-  const alreadyUsed =
-    new Set();
+  if (registrationLoadError) {
 
+    console.error(
+      registrationLoadError
+    );
 
-  currentRegs.forEach(
-    registration => {
-
-      getRegistrationMembers(
-        registration
-      )
-      .forEach(
-        id =>
-          alreadyUsed.add(
-            String(id)
-          )
-      );
-
-    }
-  );
-
-
-  if(
-    alreadyUsed.has(
-      String(member1)
-    )
-  ){
-
-    if(errorBox){
-
-      errorBox.textContent =
-        "Thành viên 1 đã đăng ký trong giải này.";
-
-      errorBox.classList.remove(
-        "hidden"
-      );
-
-    }
+    showRegistrationError(
+      "Không thể kiểm tra danh sách đăng ký."
+    );
 
     return;
-
   }
 
 
-  if(
-    member2
-    &&
-    alreadyUsed.has(
-      String(member2)
-    )
-  ){
+  /*
+   * Kiểm tra một thành viên không được
+   * đăng ký 2 đội trong cùng giải.
+   */
 
-    if(errorBox){
+  const alreadyRegistered =
+    (currentRegistrations || [])
+      .some(reg => {
 
-      errorBox.textContent =
-        "Thành viên 2 đã đăng ký trong giải này.";
+        const memberIds = [
 
-      errorBox.classList.remove(
-        "hidden"
-      );
+          reg.member_id,
 
-    }
+          reg.member2_id,
+
+          reg.member_2_id,
+
+          reg.partner_member_id
+
+        ]
+          .filter(Boolean)
+          .map(String);
+
+
+        if (
+          memberIds.includes(
+            String(member1.id)
+          )
+        ) {
+          return true;
+        }
+
+
+        if (
+          member2 &&
+          memberIds.includes(
+            String(member2.id)
+          )
+        ) {
+          return true;
+        }
+
+
+        return false;
+
+      });
+
+
+  if (alreadyRegistered) {
+
+    showRegistrationError(
+      "Một trong các thành viên đã đăng ký trong giải này."
+    );
 
     return;
+  }
+
+
+  /*
+   * Kiểm tra giới hạn số đội/người
+   */
+
+  if (
+    tournament.max_teams &&
+    (currentRegistrations || []).length >=
+      Number(tournament.max_teams)
+  ) {
+
+    showRegistrationError(
+      "Giải đấu đã đủ số lượng đăng ký."
+    );
+
+    return;
+  }
+
+
+  /*
+   * Tạo tên đội
+   */
+
+  let finalTeamName =
+    teamName;
+
+
+  if (
+    tournament.competition_type ===
+    "singles"
+  ) {
+
+    finalTeamName =
+      member1.full_name;
+
+  } else if (!finalTeamName) {
+
+    finalTeamName =
+      (
+        member1.full_name +
+        " & " +
+        member2.full_name
+      );
 
   }
 
 
   /*
-    Kiểm tra giới hạn số đội/người.
-  */
-
-  if(
-    tournament.max_teams
-    &&
-    currentRegs.length
-    >=
-    Number(
-      tournament.max_teams
-    )
-  ){
-
-    if(errorBox){
-
-      errorBox.textContent =
-        "Giải đã đủ số lượng đăng ký.";
-
-      errorBox.classList.remove(
-        "hidden"
-      );
-
-    }
-
-    return;
-
-  }
-
+   * Payload
+   */
 
   const payload = {
 
     tournament_id:
-      tournamentId,
+      tournament.id,
 
     member_id:
-      member1,
-
-    /*
-      Với schema hiện tại,
-      ta ưu tiên member2_id.
-
-      Nếu bảng chưa có cột này,
-      lỗi sẽ được báo rõ để sửa schema.
-    */
-
-    member2_id:
-      type === "doubles"
-        ? member2
-        : null,
+      member1.id,
 
     team_name:
-      type === "doubles"
-        ? (
-            teamName
-            ||
-            (
-              memberName(member1)
-              +
-              " / "
-              +
-              memberName(member2)
-            )
-          )
-        : memberName(member1),
+      finalTeamName,
 
     partner_name:
-      type === "doubles"
-        ? memberName(member2)
+      member2
+        ? member2.full_name
         : null,
 
     status:
@@ -7878,57 +7810,96 @@ async function submitRegistration(
   };
 
 
-  const {
-    data,
-    error
-  } =
-    await supabaseClient
-      .from("tournament_registrations")
+  /*
+   * Chỉ thêm member2_id cho giải đôi
+   */
+
+  if (
+    tournament.competition_type ===
+    "doubles"
+  ) {
+
+    payload.member2_id =
+      member2.id;
+
+  }
+
+
+  try {
+
+    showToast(
+      "Đang đăng ký..."
+    );
+
+
+    const {
+      data,
+      error
+    } = await supabaseClient
+      .from(
+        "tournament_registrations"
+      )
       .insert(payload)
       .select()
       .single();
 
 
-  if(error){
-
-    console.error(
-      "REGISTRATION ERROR:",
-      error
-    );
+    if (error) {
+      throw error;
+    }
 
 
-    if(errorBox){
+    /*
+     * Cập nhật local
+     */
 
-      errorBox.textContent =
-        error.message;
+    registrations.push(data);
 
-      errorBox.classList.remove(
-        "hidden"
+
+    closeModal();
+
+
+    /*
+     * Render lại giải
+     */
+
+    renderTournaments();
+
+
+    if (
+      typeof renderTournamentPanel ===
+      "function"
+    ) {
+
+      renderTournamentPanel(
+        tournament.id
       );
 
     }
 
-    return;
+
+    showToast(
+      "Đăng ký thành công."
+    );
+
+
+  } catch (error) {
+
+    console.error(
+      "submitRegistration:",
+      error
+    );
+
+
+    showToast(
+      "Không thể đăng ký: " +
+      (
+        error.message ||
+        "Lỗi không xác định"
+      )
+    );
 
   }
-
-
-  registrations =
-    [
-      ...registrations,
-      data
-    ];
-
-
-  closeModal();
-
-
-  await renderTournamentPanel();
-
-
-  alert(
-    "Đăng ký thành công."
-  );
 
 }
 
