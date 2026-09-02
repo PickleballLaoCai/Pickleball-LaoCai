@@ -3062,7 +3062,7 @@ function canManageMatch(match){
 }
 function adminRoleText(){
   if(isSuperAdmin()) return "Quản trị cấp cao";
-  if(isClubAdmin()) return "Chủ tịch CLB / Quản trị CLB";
+  if(isClubAdmin()) return "Chủ tịch CLB";
   return "Chưa đăng nhập";
 }
 
@@ -11506,9 +11506,7 @@ async function submitMatchResult(matchId) {
     Number(match.target_score || (
       String(match.round_name || "").toLowerCase().includes("vòng 1")
         ? 11
-        : String(match.round_name || "").toLowerCase().includes("tứ kết")
-          ? 13
-          : 15
+        : 15
     ));
 
   if(scoreA < targetScore && scoreB < targetScore){
@@ -12927,6 +12925,33 @@ async function loadCurrentAdmin(){
   currentAdmin = null;
   if(!currentSession?.user?.id) return;
 
+  // Ưu tiên RPC SECURITY DEFINER để kiểm tra quyền, tránh lỗi RLS/policy
+  // khi frontend đọc trực tiếp bảng admin_users.
+  try {
+    const { data: roleData, error: roleError } =
+      await supabaseClient.rpc("current_admin_role");
+
+    if(!roleError && roleData){
+      const { data: clubData } =
+        await supabaseClient.rpc("current_admin_club");
+
+      currentAdmin = {
+        user_id: currentSession.user.id,
+        role: roleData,
+        club_name: clubData || null,
+        created_at: null
+      };
+      return;
+    }
+
+    if(roleError){
+      console.warn("RPC kiểm tra quyền quản trị thất bại, thử đọc admin_users:", roleError);
+    }
+  } catch (rpcError) {
+    console.warn("Không gọi được RPC quyền quản trị:", rpcError);
+  }
+
+  // Fallback cho trường hợp RPC chưa được cache/không khả dụng.
   const { data, error } = await supabaseClient
     .from("admin_users")
     .select("user_id, role, club_name, created_at")
@@ -13117,6 +13142,19 @@ async function renderAdminPanel(){
 
   window.__pendingAssessments = assessments || [];
 
+  let adminUsers = [];
+  if(isSuperAdmin()) {
+    const { data: adminRows, error: adminRowsError } = await supabaseClient
+      .from("admin_users")
+      .select("user_id, role, club_name, created_at")
+      .order("created_at", { ascending:false });
+    if(adminRowsError){
+      console.warn("Không tải được danh sách quản trị:", adminRowsError);
+    } else {
+      adminUsers = adminRows || [];
+    }
+  }
+
   const myTournaments = isSuperAdmin()
     ? tournaments
     : tournaments.filter(t => String(t.created_by || "") === String(currentSession.user.id));
@@ -13171,6 +13209,27 @@ async function renderAdminPanel(){
         <button class="btn btn-secondary" onclick="go('rating');closeModal();">📊 Chấm trình</button>
         <button class="btn btn-danger" onclick="adminLogout()">Đăng xuất</button>
       </div>
+
+      ${isSuperAdmin() ? `
+        <h4>👥 Tài khoản Chủ tịch CLB</h4>
+        <div class="table-wrap">
+          <table class="admin-table">
+            <thead><tr><th>Tài khoản</th><th>Quyền</th><th>CLB</th><th>Ngày cấp</th></tr></thead>
+            <tbody>
+              ${adminUsers.map(u => `
+                <tr>
+                  <td><code>${escapeHtml(u.user_id || "")}</code></td>
+                  <td>${u.role === "super_admin" ? "⚙️ Quản trị cấp cao" : "👑 Chủ tịch CLB"}</td>
+                  <td>${escapeHtml(u.club_name || (u.role === "super_admin" ? "Toàn hệ thống" : "Chưa gán CLB"))}</td>
+                  <td>${formatDate(u.created_at)}</td>
+                </tr>`).join("") || `<tr><td colspan="4">Chưa có tài khoản quản trị nào.</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+        <div class="notice" style="margin-top:10px">
+          <b>Tạo tài khoản mới:</b> tạo Email + Mật khẩu trước tại Supabase → Authentication → Users, sau đó gán quyền <b>Quản trị cấp cao</b> hoặc <b>Chủ tịch CLB</b>. Không tạo tài khoản bằng mã frontend để tránh lộ quyền quản trị.
+        </div>
+      ` : ""}
 
       <h4>🏆 Theo dõi giải đấu</h4>
       <div class="table-wrap">
