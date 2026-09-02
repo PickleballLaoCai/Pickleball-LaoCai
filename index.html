@@ -1514,6 +1514,46 @@ th{
 
 }
 
+
+/* =========================================================
+   QUẢN TRỊ / PHÂN QUYỀN
+========================================================= */
+.admin-access{
+  display:flex;
+  justify-content:flex-end;
+  gap:8px;
+  margin-top:8px;
+  flex-wrap:wrap;
+}
+.admin-access button{
+  border:1px solid rgba(255,255,255,.35);
+  background:rgba(255,255,255,.12);
+  color:#fff;
+  border-radius:10px;
+  padding:7px 12px;
+  font-weight:800;
+}
+.admin-access button:hover{background:#fff;color:var(--pink-dark)}
+.admin-panel{
+  background:#fff;
+  border:1px solid var(--green-border);
+  border-radius:18px;
+  padding:18px;
+  box-shadow:var(--shadow);
+}
+.admin-role{
+  display:inline-flex;
+  padding:5px 10px;
+  border-radius:999px;
+  background:var(--pink-light);
+  color:var(--pink-dark);
+  font-weight:800;
+  font-size:12px;
+}
+.admin-table{width:100%;border-collapse:collapse}
+.admin-table th,.admin-table td{padding:9px;border-bottom:1px solid #f0dce7;text-align:left;font-size:13px;vertical-align:top}
+.admin-table th{background:#fff4f9;color:var(--pink-dark)}
+
 </style>
 
 </head>
@@ -1648,6 +1688,15 @@ th{
       </button>
 
     </nav>
+
+    <div class="admin-access">
+      <button type="button" id="clubAdminButton" onclick="openClubAdminPanel()">
+        👑 Chủ tịch CLB
+      </button>
+      <button type="button" id="superAdminButton" onclick="openAdminPanel()">
+        ⚙️ Quản trị
+      </button>
+    </div>
 
   </div>
 
@@ -2975,6 +3024,47 @@ let currentTournamentId = null;
 
 let applicationReady = false;
 
+/* =========================================================
+   PHÂN QUYỀN QUẢN TRỊ
+   super_admin: quyền cao nhất, quyết định rating, quản trị tất cả.
+   club_admin: chủ CLB, tạo giải/chấm trình đề xuất và nhập kết quả
+   của các giải do mình tạo; không được xoá giải và không quyết định
+   rating cuối cùng.
+========================================================= */
+let currentSession = null;
+let currentAdmin = null;
+
+function isLoggedIn(){
+  return !!currentSession;
+}
+function isSuperAdmin(){
+  return currentAdmin?.role === "super_admin";
+}
+function isClubAdmin(){
+  return currentAdmin?.role === "club_admin";
+}
+function isAdmin(){
+  return isSuperAdmin() || isClubAdmin();
+}
+function canCreateTournament(){
+  return isAdmin();
+}
+function canManageTournament(tournament){
+  if(!isAdmin() || !tournament) return false;
+  if(isSuperAdmin()) return true;
+  return String(tournament.created_by || "") === String(currentSession?.user?.id || "");
+}
+function canManageMatch(match){
+  if(!isAdmin() || !match) return false;
+  if(isSuperAdmin()) return true;
+  const t = tournamentById(match.tournament_id);
+  return canManageTournament(t);
+}
+function adminRoleText(){
+  if(isSuperAdmin()) return "Quản trị cấp cao";
+  if(isClubAdmin()) return "Chủ tịch CLB / Quản trị CLB";
+  return "Chưa đăng nhập";
+}
 
 /* =========================================================
    3. CẤU HÌNH CHẤM TRÌNH
@@ -4757,126 +4847,40 @@ document
 
 
         /*
-          Cập nhật rating hiện tại.
+          Chủ tịch CLB / quản trị chỉ gửi ĐỀ XUẤT.
+          Không được tự thay đổi members.rating.
+          Quản trị cấp cao sẽ phê duyệt hoặc từ chối.
         */
-
-        const {
-          error:
-            updateError
-        } =
-          await supabaseClient
-            .from("members")
-            .update({
-
-              rating:
-                proposedRating,
-
-              rating_status:
-                "Chờ xác thực",
-
-              rating_confidence:
-                0.5
-
-            })
-            .eq(
-              "id",
-              memberId
-            );
-
-
-        if(updateError){
-
-          throw updateError;
-
+        if(!isAdmin()){
+          throw new Error("Chỉ quản trị hoặc chủ CLB được chấm trình.");
         }
 
-
-        /*
-          Ghi lịch sử.
-
-          Nếu bảng rating_history
-          không cho phép insert do RLS,
-          ta vẫn thông báo rõ lỗi.
-        */
-
         const {
-          error:
-            historyError
+          error: assessmentSaveError
         } =
           await supabaseClient
-            .from("rating_history")
+            .from("rating_assessments")
             .insert({
-
-              member_id:
-                memberId,
-
-              old_rating:
-                oldRating,
-
-              new_rating:
-                proposedRating,
-
-              change:
-                proposedRating
-                -
-                oldRating,
-
-              reason:
-                "Tự chấm trình",
-
-              source:
-                "self_assessment"
-
+              member_id: memberId,
+              technical: technical,
+              tactical: tactical,
+              experience: experience,
+              competition: competition,
+              total_score: totalScore,
+              proposed_rating: proposedRating,
+              status: "pending",
+              reviewer_note: null
             });
 
-
-        if(historyError){
-
-          console.warn(
-            "Không ghi được lịch sử rating:",
-            historyError
-          );
-
+        if(assessmentSaveError){
+          throw assessmentSaveError;
         }
-
-
-        /*
-          Đồng bộ bộ nhớ phía trình duyệt.
-        */
-
-        if(member){
-
-          member.rating =
-            proposedRating;
-
-          member.rating_status =
-            "Chờ xác thực";
-
-          member.rating_confidence =
-            0.5;
-
-        }
-
-
-        renderMembers();
-
-        renderRatingSelect();
-
-        renderRanking();
-
 
         alert(
-
-          "Đã lưu tự chấm trình: "
-
-          +
-
-          formatRating(
-            proposedRating
-          )
-
+          "Đã gửi đề xuất chấm trình " +
+          formatRating(proposedRating) +
+          ". Chờ quản trị cấp cao quyết định."
         );
-
 
       }catch(error){
 
@@ -5664,384 +5668,47 @@ async function updateRatingsAfterMatch(
 ){
 
   /*
-    Hàm này được PHẦN 3 sử dụng.
-
-    match.team_a_members
-    match.team_b_members
-
-    sẽ là mảng ID thành viên.
-
-    Ví dụ đánh đôi:
-
-    team_a_members = [
-      id1,
-      id2
-    ]
-
+    Rating sau trận được thực hiện bằng RPC bảo mật trên Supabase.
+    Người dùng/CLB không thể tự update members.rating trực tiếp.
   */
-
-
-  /*
-    Trận đấu trong DB chỉ lưu team_a/team_b là ID của
-    tournament_registration. Vì vậy phải lấy thành viên
-    từ registration trước khi tính Elo.
-  */
-  const regA = getMatchRegistration(match.team_a);
-  const regB = getMatchRegistration(match.team_b);
-
-  const teamA = Array.isArray(match.team_a_members)
-    ? match.team_a_members.filter(Boolean)
-    : regA
-      ? [regA.member_id, regA.member2_id, regA.member_2_id, regA.partner_member_id].filter(Boolean)
-      : [];
-
-  const teamB = Array.isArray(match.team_b_members)
-    ? match.team_b_members.filter(Boolean)
-    : regB
-      ? [regB.member_id, regB.member2_id, regB.member_2_id, regB.partner_member_id].filter(Boolean)
-      : [];
-
-
-  if(
-    !teamA.length
-    ||
-    !teamB.length
-  ){
-
-    return {
-
-      success:false,
-
-      reason:
-        "Không xác định được thành viên của hai đội."
-
-    };
-
-  }
-
-
-  const ratingA =
-    teamRating(teamA);
-
-
-  const ratingB =
-    teamRating(teamB);
-
-
-  const delta =
-    calculateRatingDelta(
-      ratingA,
-      ratingB,
-      scoreA,
-      scoreB
+  const { data, error } =
+    await supabaseClient.rpc(
+      "apply_match_rating",
+      { p_match_id: match.id }
     );
 
-
-  const changes = [];
-
-
-  /*
-    Đội A
-  */
-
-  for(
-    const memberId
-    of
-    teamA
-  ){
-
-    const member =
-      memberById(
-        memberId
-      );
-
-
-    if(!member){
-      continue;
-    }
-
-
-    const oldRating =
-      numberValue(
-        member.rating,
-        1
-      );
-
-
-    const newRating =
-      Math.max(
-        RATING_CONFIG.min,
-        oldRating + delta.deltaA
-      );
-
-
-    changes.push({
-
-      memberId,
-
-      oldRating,
-
-      newRating,
-
-      change:
-        newRating
-        -
-        oldRating,
-
-      won:
-        scoreA > scoreB
-
-    });
-
+  if(error){
+    throw error;
   }
 
-
   /*
-    Đội B
+    Đồng bộ local cache theo kết quả server.
   */
-
-  for(
-    const memberId
-    of
-    teamB
-  ){
-
-    const member =
-      memberById(
-        memberId
-      );
-
-
-    if(!member){
-      continue;
-    }
-
-
-    const oldRating =
-      numberValue(
-        member.rating,
-        1
-      );
-
-
-    const newRating =
-      Math.max(
-        RATING_CONFIG.min,
-        oldRating + delta.deltaB
-      );
-
-
-    changes.push({
-
-      memberId,
-
-      oldRating,
-
-      newRating,
-
-      change:
-        newRating
-        -
-        oldRating,
-
-      won:
-        scoreB > scoreA
-
-    });
-
-  }
-
-
-  /*
-    Ghi từng thay đổi vào members
-    và rating_history.
-  */
-
-  for(
-    const change
-    of
-    changes
-  ){
-
-    const member =
-      memberById(
-        change.memberId
-      );
-
-
-    const newMatches =
-      numberValue(
-        member?.matches_played,
-        0
-      )
-      +
-      1;
-
-
-    const newWins =
-      numberValue(
-        member?.wins,
-        0
-      )
-      +
-      (
-        change.won
-          ? 1
-          : 0
-      );
-
-
-    const newLosses =
-      numberValue(
-        member?.losses,
-        0
-      )
-      +
-      (
-        change.won
-          ? 0
-          : 1
-      );
-
-
-    const {
-      error:updateError
-    } =
-      await supabaseClient
-        .from("members")
-        .update({
-
-          rating:
-            change.newRating,
-
-          rating_status:
-            "Đã xác thực",
-
-          rating_confidence:
-            Math.min(
-              1,
-              numberValue(
-                member?.rating_confidence,
-                0.5
-              )
-              +
-              0.05
-            ),
-
-          matches_played:
-            newMatches,
-
-          wins:
-            newWins,
-
-          losses:
-            newLosses
-
-        })
-        .eq(
-          "id",
-          change.memberId
-        );
-
-
-    if(updateError){
-
-      throw updateError;
-
-    }
-
-
-    const {
-      error:historyError
-    } =
-      await supabaseClient
-        .from("rating_history")
-        .insert({
-
-          member_id:
-            change.memberId,
-
-          old_rating:
-            change.oldRating,
-
-          new_rating:
-            change.newRating,
-
-          change:
-            change.change,
-
-          reason:
-            "Cập nhật sau trận đấu",
-
-          source:
-            "match_result"
-
-        });
-
-
-    if(historyError){
-
-      console.warn(
-        "Rating history warning:",
-        historyError
-      );
-
-    }
-
-
-    /*
-      Đồng bộ dữ liệu local.
-    */
-
-    if(member){
-
-      member.rating =
-        change.newRating;
-
-      member.rating_status =
-        "Đã xác thực";
-
-      member.rating_confidence =
-        Math.min(
-          1,
-          numberValue(
-            member.rating_confidence,
-            0.5
-          )
-          +
-          0.05
-        );
-
-      member.matches_played =
-        newMatches;
-
-      member.wins =
-        newWins;
-
-      member.losses =
-        newLosses;
-
-    }
-
-  }
-
+  const changes = Array.isArray(data?.changes)
+    ? data.changes
+    : [];
+
+  changes.forEach(change => {
+    const member = memberById(change.member_id);
+    if(!member) return;
+
+    member.rating = Number(change.new_rating);
+    member.rating_status = "Đã xác thực";
+    member.rating_confidence = Number(change.rating_confidence ?? member.rating_confidence ?? 0.5);
+    member.matches_played = Number(change.matches_played ?? member.matches_played ?? 0);
+    member.wins = Number(change.wins ?? member.wins ?? 0);
+    member.losses = Number(change.losses ?? member.losses ?? 0);
+  });
+
+  renderMembers();
+  renderRatingSelect();
+  renderRanking();
 
   return {
-
     success:true,
-
-    changes,
-
-    deltaA:
-      delta.deltaA,
-
-    deltaB:
-      delta.deltaB
-
+    changes
   };
-
 }
-
 
 /* =========================================================
    27. KIỂM TRA KẾT NỐI SUPABASE
@@ -6157,6 +5824,10 @@ document
 
       event.preventDefault();
 
+      if(!canCreateTournament()){
+        alert("Chỉ quản trị hoặc chủ CLB mới được tạo giải.");
+        return;
+      }
 
       const button =
         this.querySelector(
@@ -6340,7 +6011,10 @@ document
 
           poster_url:
 
-            posterUrl
+            posterUrl,
+
+          created_by:
+            currentSession?.user?.id || null
 
         };
 
@@ -6682,6 +6356,108 @@ function registrationTeamName(
 
 
 /* =========================================================
+   THANH TOÁN GIẢI ĐẤU
+   - unpaid: chưa nộp
+   - proof_submitted: đã gửi ảnh/chứng từ, chờ xác nhận
+   - paid_confirmed: đã xác nhận nộp phí
+   - rejected: chứng từ không hợp lệ
+========================================================= */
+function paymentStatusText(status){
+  const map = {
+    unpaid: "Chưa nộp phí",
+    proof_submitted: "Chờ xác nhận phí",
+    paid_confirmed: "Đã nộp phí",
+    rejected: "Từ chối chứng từ"
+  };
+  return map[String(status || "unpaid")] || "Chưa nộp phí";
+}
+
+function paymentStatusBadge(status){
+  const st = String(status || "unpaid");
+  const cls = st === "paid_confirmed" ? "badge badge-green" : st === "proof_submitted" ? "badge" : "badge";
+  return `<span class="${cls}">${escapeHtml(paymentStatusText(st))}</span>`;
+}
+
+function paidRegistrationsForTournament(tournamentId){
+  return registrationsForTournament(tournamentId).filter(r =>
+    String(r.payment_status || "unpaid") === "paid_confirmed" &&
+    String(r.status || "registered") !== "cancelled"
+  );
+}
+
+async function uploadPrivatePaymentProof(file){
+  if(!file) return null;
+  const extension = (file.name || "jpg").includes(".") ? file.name.split(".").pop().toLowerCase() : "jpg";
+  const path = `payments/${Date.now()}-${Math.random().toString(36).slice(2,10)}.${extension}`;
+  const { error } = await supabaseClient.storage.from("payment-proofs").upload(path, file, { cacheControl:"3600", upsert:false });
+  if(error) throw error;
+  return path;
+}
+
+async function openPaymentModal(registrationId){
+  const reg = registrations.find(r => String(r.id) === String(registrationId));
+  if(!reg){ showToast("Không tìm thấy đăng ký."); return; }
+  if(String(reg.payment_status || "unpaid") === "paid_confirmed") {
+    showToast("Đội này đã được xác nhận nộp phí.");
+    return;
+  }
+  openModal(`
+    <div class="modal-head"><div><h3>💳 Xác nhận nộp phí</h3><div class="muted">${escapeHtml(getTeamDisplayName(reg))}</div></div><button class="icon-btn" onclick="closeModal()">✕</button></div>
+    <div class="notice">Chuyển khoản: tải ảnh/chứng từ nộp phí lên. Nếu nộp tiền mặt, Chủ tịch CLB hoặc Quản trị cấp cao sẽ xác nhận.</div>
+    <div class="form-group"><label>Số điện thoại thành viên *</label><input id="paymentPhone" type="tel" placeholder="Nhập số điện thoại để xác thực" /></div>
+    <div class="form-group"><label>Ảnh/chứng từ nộp phí</label><input id="paymentProofFile" type="file" accept="image/*,.pdf" /></div>
+    <div class="row-actions"><button class="btn" onclick="closeModal()">Huỷ</button><button class="btn primary" onclick="submitPaymentProof('${reg.id}')">📎 Gửi xác nhận nộp phí</button></div>
+  `);
+}
+
+async function submitPaymentProof(registrationId){
+  const phone = document.getElementById("paymentPhone")?.value.trim() || "";
+  const file = document.getElementById("paymentProofFile")?.files?.[0];
+  if(!phone){ showToast("Nhập số điện thoại."); return; }
+  if(!file){ showToast("Chọn ảnh/chứng từ nộp phí."); return; }
+  try{
+    showToast("Đang tải chứng từ...");
+    const path = await uploadPrivatePaymentProof(file);
+    const { data, error } = await supabaseClient.rpc("submit_payment_proof", { p_registration_id: Number(registrationId), p_phone: phone, p_proof_path: path });
+    if(error) throw error;
+    if(data && data.ok === false) throw new Error(data.message || "Không xác nhận được chứng từ.");
+    closeModal();
+    await refreshApplication();
+    if(currentTournamentId) await renderTournamentPanel();
+    showToast("Đã gửi chứng từ. Chờ Chủ tịch CLB/Quản trị xác nhận.");
+  }catch(error){
+    console.error(error);
+    showToast("Không thể gửi chứng từ: " + (error.message || "Lỗi"));
+  }
+}
+
+async function confirmRegistrationPayment(registrationId, method="cash", approved=true){
+  if(!isAdmin()){ showToast("Chỉ Chủ tịch CLB hoặc Quản trị mới được xác nhận phí."); return; }
+  const reg = registrations.find(r => String(r.id) === String(registrationId));
+  if(!reg){ showToast("Không tìm thấy đăng ký."); return; }
+  const tournament = tournamentById(reg.tournament_id);
+  if(!canManageTournament(tournament)){ showToast("Bạn không có quyền xử lý đăng ký của giải này."); return; }
+  const patch = approved ? { payment_status:"paid_confirmed", payment_method:method, payment_confirmed_by:currentSession.user.id, payment_confirmed_at:new Date().toISOString() } : { payment_status:"rejected", payment_method:method, payment_confirmed_by:currentSession.user.id, payment_confirmed_at:new Date().toISOString() };
+  const { data, error } = await supabaseClient.from("tournament_registrations").update(patch).eq("id", registrationId).select().single();
+  if(error){ showToast("Không thể cập nhật phí: " + error.message); return; }
+  const idx = registrations.findIndex(r => String(r.id) === String(registrationId));
+  if(idx>=0) registrations[idx] = data || {...registrations[idx], ...patch};
+  await renderTournamentPanel();
+  showToast(approved ? "Đã xác nhận nộp phí." : "Đã từ chối chứng từ.");
+}
+
+async function viewPaymentProof(registrationId){
+  if(!isAdmin()){ showToast("Chỉ quản trị mới được xem chứng từ."); return; }
+  const reg = registrations.find(r => String(r.id) === String(registrationId));
+  if(!reg?.payment_proof_path){ showToast("Chưa có chứng từ."); return; }
+  const tournament = tournamentById(reg.tournament_id);
+  if(!canManageTournament(tournament)){ showToast("Bạn không có quyền xem chứng từ giải này."); return; }
+  const { data, error } = await supabaseClient.storage.from("payment-proofs").createSignedUrl(reg.payment_proof_path, 600);
+  if(error){ showToast("Không mở được chứng từ: " + error.message); return; }
+  window.open(data.signedUrl, "_blank");
+}
+
+/* =========================================================
    8. CHUYỂN ĐĂNG KÝ THÀNH ĐỘI
  ========================================================= */
 
@@ -6721,6 +6497,10 @@ function buildTeams(
         registration.status !==
         "cancelled"
 
+    )
+    .filter(
+      registration =>
+        String(registration.payment_status || "unpaid") === "paid_confirmed"
     )
     .map(
       (registration,index) => {
@@ -7094,14 +6874,14 @@ if (
 
 
                       <td>
-
-                        <span class="badge">
-                          ${escapeHtml(
-                            reg.status ||
-                            "registered"
-                          )}
-                        </span>
-
+                        ${paymentStatusBadge(reg.payment_status)}
+                        <div class="muted" style="margin-top:5px;">${escapeHtml(reg.status || "registered")}</div>
+                        <div class="row-actions" style="margin-top:6px;">
+                          <button class="btn" style="padding:5px 8px;" onclick="openPaymentModal('${reg.id}')">💳 Đã nộp phí</button>
+                          ${isAdmin() && reg.payment_proof_path ? `<button class="btn" style="padding:5px 8px;" onclick="viewPaymentProof('${reg.id}')">📎 Xem ảnh</button>` : ""}
+                          ${isAdmin() && canManageTournament(tournament) && String(reg.payment_status || "unpaid") !== "paid_confirmed" ? `<button class="btn primary" style="padding:5px 8px;" onclick="confirmRegistrationPayment('${reg.id}','cash',true)">💵 Xác nhận tiền mặt</button>` : ""}
+                          ${isAdmin() && canManageTournament(tournament) && String(reg.payment_status || "unpaid") === "proof_submitted" ? `<button class="btn danger" style="padding:5px 8px;" onclick="confirmRegistrationPayment('${reg.id}','transfer',false)">Từ chối</button>` : ""}
+                        </div>
                       </td>
 
                     </tr>
@@ -7863,6 +7643,29 @@ if (
       </div>
 
 
+      <div class="notice" style="margin-top:12px;">
+        💰 <b>Phí:</b> ${paidRegistrationsForTournament(tournament.id).length}/${tournamentRegistrations.filter(r => String(r.status || "registered") !== "cancelled").length} đội/người đã xác nhận nộp phí.
+        <br><span class="muted">Chỉ các đội đã <b>Đã nộp phí</b> mới được đưa vào bảng đấu/lịch thi đấu. Đội chưa nộp phí sẽ không được xếp trận.</span>
+      </div>
+      ${isAdmin() && canManageTournament(tournament) ? `
+        <div class="row-actions" style="margin-top:10px;">
+          <button class="btn primary" onclick="openRegistrationModal('${tournament.id}')">➕ Thêm đội/người thi đấu</button>
+        </div>` : ""}
+
+      <div class="card" style="margin-top:12px;">
+        <div class="section-title">💰 Danh sách đã nộp phí</div>
+        ${paidRegistrationsForTournament(tournament.id).length ? `
+          <div class="table-wrap"><table><thead><tr><th>#</th><th>Đội/người</th><th>Trình</th><th>Thanh toán</th>${isAdmin() && canManageTournament(tournament) ? '<th>Sắp bảng</th>' : ''}</tr></thead><tbody>
+          ${paidRegistrationsForTournament(tournament.id).map((reg,index)=>{
+            const ids=getRegistrationMembers(reg);
+            const rating=ids.length===2 ? Number(members.find(m=>String(m.id)===String(ids[0]))?.rating||1)+Number(members.find(m=>String(m.id)===String(ids[1]))?.rating||1) : Number(members.find(m=>String(m.id)===String(ids[0]))?.rating||1);
+            const groupCount=getGroupCountForTeams(Math.max(2,paidRegistrationsForTournament(tournament.id).length));
+            const opts=Array.from({length:groupCount},(_,i)=>'Bảng '+String.fromCharCode(65+i));
+            return `<tr><td>${index+1}</td><td><strong>${escapeHtml(getTeamDisplayName(reg))}</strong></td><td>${formatRating(rating)}</td><td>${paymentStatusBadge(reg.payment_status)}${reg.payment_method ? `<div class="muted">${escapeHtml(reg.payment_method==='cash'?'Tiền mặt':'Chuyển khoản')}</div>`:''}</td>${isAdmin() && canManageTournament(tournament) ? `<td><select onchange="setRegistrationGroup('${reg.id}',this.value)"><option value="">Tự động</option>${opts.map(g=>`<option value="${escapeHtml(g)}" ${String(reg.group_name||'').toLowerCase()===g.toLowerCase()?'selected':''}>${escapeHtml(g)}</option>`).join('')}</select></td>` : ''}</tr>`;
+          }).join('')}
+          </tbody></table></div>` : '<div class="empty">Chưa có đội/người nào được xác nhận nộp phí.</div>'}
+      </div>
+
       <!-- ĐIỀU PHỐI TẠO BẢNG / LỊCH -->
 
       <div
@@ -7879,26 +7682,28 @@ if (
                 tournamentMatches.length === 0
                   ? `
                     <div class="empty">
-                      Giải đã có
-                      <strong>${tournamentRegistrations.length}</strong>
-                      người/đội đăng ký.
+                      Đã có
+                      <strong>${paidRegistrationsForTournament(tournament.id).length}</strong>
+                      đội/người đã nộp phí.
                       <div class="muted" style="margin-top:6px;">
                         Hệ thống sẽ tự chia bảng và tạo lịch vòng bảng.
                       </div>
                     </div>
 
+                    ${paidRegistrationsForTournament(tournament.id).length >= 2 ? `
                     <div class="row-actions" style="margin-top:12px;">
                       <button
                         class="btn primary"
                         onclick="generateGroupMatches('${tournament.id}')">
                         ⚡ Tạo bảng đấu & lịch vòng bảng
                       </button>
-                    </div>
+                    </div>` : `
+                    <div class="notice" style="margin-top:12px;">⚠️ Cần ít nhất 2 đội/người được <b>xác nhận nộp phí</b> mới tạo được bảng đấu.</div>`}
                   `
                   : (
                       (() => {
                         const groupCountForAction =
-                          getGroupCountForTeams(tournamentRegistrations.length);
+                          getGroupCountForTeams(paidRegistrationsForTournament(tournament.id).length);
 
                         const groupMatches =
                           tournamentMatches.filter(m =>
@@ -7990,16 +7795,18 @@ if (
                 tournamentMatches.length === 0
                   ? `
                     <div class="empty">
-                      Đã đủ người/đội. Có thể tạo vòng 1 Double Elimination.
+                      Đã có <b>${paidRegistrationsForTournament(tournament.id).length}</b> đội/người đã nộp phí. Chỉ các đội này được đưa vào Double Elimination.
                     </div>
 
+                    ${paidRegistrationsForTournament(tournament.id).length >= 2 ? `
                     <div class="row-actions" style="margin-top:12px;">
                       <button
                         class="btn primary"
                         onclick="generateEliminationMatches('${tournament.id}')">
                         ⚡ Tạo vòng 1
                       </button>
-                    </div>
+                    </div>` : `
+                    <div class="notice" style="margin-top:12px;">⚠️ Cần ít nhất 2 đội/người được <b>xác nhận nộp phí</b> mới tạo được vòng 1.</div>`}
                   `
                   : `
                     <div class="notice">
@@ -9029,7 +8836,16 @@ async function submitRegistration(tournamentId) {
         : null,
 
     status:
-      "registered"
+      "registered",
+
+    payment_status:
+      "unpaid",
+
+    payment_method:
+      null,
+
+    payment_proof_path:
+      null
 
   };
 
@@ -9830,7 +9646,17 @@ function createGroups(
     giúp phân bổ seed đều hơn.
   */
 
-  teams.forEach(
+  const assigned = [];
+
+  teams.forEach(team => {
+    const g = String(team.registration?.group_name || "").trim();
+    if(g){
+      const target = groups.find(x => x.name.toLowerCase() === g.toLowerCase());
+      if(target){ target.teams.push(team); assigned.push(String(team.id)); }
+    }
+  });
+
+  teams.filter(team => !assigned.includes(String(team.id))).forEach(
     (team,index) => {
 
       const round =
@@ -10007,23 +9833,17 @@ async function renderCompetitionStructure(
                         <div class="group-team">
 
                           <span>
-
-                            ${index + 1}.
-
-                            ${esc(
-                              team.name
-                            )}
-
+                            ${index + 1}. ${esc(team.name)}
                           </span>
 
-
                           <span>
-
-                            ${formatRating(
-                              teamRating(
-                                team.memberIds
-                              )
-                            )}
+                            ${formatRating(teamRating(team.memberIds))}
+                            ${isAdmin() && canManageTournament(tournament) ? `
+                              <select onchange="setRegistrationGroup('${team.registrationId}',this.value)" style="margin-left:8px;">
+                                <option value="">Tự động</option>
+                                ${groups.map(g=>`<option value="${escapeHtml(g.name)}" ${String(team.registration?.group_name||"").toLowerCase()===g.name.toLowerCase()?"selected":""}>${escapeHtml(g.name)}</option>`).join("")}
+                              </select>` : ""}
+                          </span>
 
                           </span>
 
@@ -10267,6 +10087,74 @@ async function renderCompetitionStructure(
 
 }
 
+
+/* =========================================================
+   ĐIỀU CHỈNH ĐỘI VÀO BẢNG
+   Chỉ Chủ tịch CLB của giải hoặc Quản trị cấp cao.
+   Thực hiện trước khi tạo lịch để không phá lịch đang chạy.
+========================================================= */
+async function setRegistrationGroup(registrationId, groupName){
+  if(!isAdmin()){ showToast("Chỉ quản trị mới được sắp đội vào bảng."); return; }
+  const reg = registrations.find(r => String(r.id) === String(registrationId));
+  if(!reg){ showToast("Không tìm thấy đội."); return; }
+  const tournament = tournamentById(reg.tournament_id);
+  if(!canManageTournament(tournament)){ showToast("Bạn không có quyền sắp đội cho giải này."); return; }
+  if(String(reg.payment_status || "unpaid") !== "paid_confirmed"){
+    showToast("Chỉ đội đã xác nhận nộp phí mới được xếp bảng."); return;
+  }
+
+  const groupMatches = matches.filter(m =>
+    String(m.tournament_id)===String(tournament.id) &&
+    String(m.notes||"")==="Vòng bảng"
+  );
+  const completedGroupMatch = groupMatches.some(matchCompleted);
+
+  if(completedGroupMatch){
+    showToast("Đã có trận vòng bảng hoàn thành. Không đổi bảng để bảo toàn bảng xếp hạng."); return;
+  }
+
+  const { data, error } = await supabaseClient.from("tournament_registrations").update({ group_name: groupName || null }).eq("id", registrationId).select().single();
+  if(error){ showToast("Không thể sắp bảng: " + error.message); return; }
+  const idx=registrations.findIndex(r=>String(r.id)===String(registrationId));
+  if(idx>=0) registrations[idx]=data || {...registrations[idx],group_name:groupName||null};
+
+  // Nếu lịch vòng bảng đã tạo nhưng chưa có trận hoàn thành, bổ sung ngay
+  // các trận còn thiếu cho đội vừa được xếp vào bảng.
+  if(groupMatches.length && groupName){
+    const paidRegs = paidRegistrationsForTournament(tournament.id);
+    const teamRegIds = new Set(
+      groupMatches
+        .filter(m => String(m.round_name||"").toLowerCase() === String(groupName).toLowerCase())
+        .flatMap(m => [String(m.team_a||""), String(m.team_b||"")])
+    );
+    const opponents = paidRegs.filter(r =>
+      String(r.id) !== String(registrationId) &&
+      String(r.group_name||"").toLowerCase() === String(groupName).toLowerCase()
+    );
+    const rows = [];
+    let nextNo = Math.max(0, ...groupMatches
+      .filter(m => String(m.round_name||"").toLowerCase() === String(groupName).toLowerCase())
+      .map(m => Number(m.match_no)||0));
+    opponents.forEach(op => {
+      const exists = groupMatches.some(m =>
+        String(m.round_name||"").toLowerCase() === String(groupName).toLowerCase() &&
+        ((String(m.team_a)===String(registrationId) && String(m.team_b)===String(op.id)) ||
+         (String(m.team_a)===String(op.id) && String(m.team_b)===String(registrationId)))
+      );
+      if(!exists){
+        rows.push({tournament_id:tournament.id, round_name:groupName, match_no:++nextNo, team_a:String(registrationId), team_b:String(op.id), target_score:11, status:"scheduled", notes:"Vòng bảng"});
+      }
+    });
+    if(rows.length){
+      const {data:newRows,error:matchError}=await supabaseClient.from("matches").insert(rows).select();
+      if(matchError){ showToast("Đã xếp bảng nhưng chưa bổ sung được lịch: "+matchError.message); }
+      else matches.push(...(newRows||[]));
+    }
+  }
+
+  await renderTournamentPanel();
+  showToast("Đã sắp đội vào "+(groupName || "tự động")+".");
+}
 
 /* =========================================================
    24. TẠO TRẬN VÒNG BẢNG
@@ -11104,7 +10992,7 @@ function renderResultMatches() {
         </div>
 
         ${
-          !completed && match.team_a && match.team_b
+          !completed && match.team_a && match.team_b && canManageMatch(match)
             ? `
               <div class="row-actions">
 
@@ -11445,6 +11333,12 @@ function renderResults() {
 ========================================================= */
 
 function openMatchResultModal(matchId) {
+  const guardMatch = matches.find(m => String(m.id) === String(matchId));
+  if(!canManageMatch(guardMatch)){
+    showToast("Bạn không có quyền nhập kết quả trận này.");
+    return;
+  }
+
 
   const match =
     matches.find(m =>
@@ -11569,6 +11463,11 @@ async function submitMatchResult(matchId) {
 
   if (!match) {
     showToast("Không tìm thấy trận.");
+    return;
+  }
+
+  if(!canManageMatch(match)){
+    showToast("Chỉ chủ CLB tạo giải hoặc quản trị cấp cao mới được nhập kết quả.");
     return;
   }
 
@@ -12095,42 +11994,67 @@ async function advanceTournamentAfterMatch(
     );
 
     const roundName = String(match.round_name || "").trim();
-    const currentRound = tournamentMatches.filter(m =>
-      String(m.round_name || "").trim() === roundName &&
+    const roundKey = roundName.toLowerCase();
+
+    /*
+     * QUAN TRỌNG: các bản cũ có thể đã tạo trùng trận Bán kết/Tứ kết.
+     * Không lấy toàn bộ các trận trùng đó để quyết định vòng sau.
+     * Chỉ lấy trận theo match_no, và nếu có bản ghi trùng thì ưu tiên
+     * bản ghi đã hoàn thành mới nhất.
+     */
+    const roundMatches = tournamentMatches.filter(m =>
+      String(m.round_name || "").trim().toLowerCase() === roundKey &&
       !String(m.notes || "").toUpperCase().includes("BYE")
     );
 
-    const completedCurrent = currentRound.filter(matchCompleted);
+    function pickCompletedByMatchNo(requiredCount) {
+      const picked = [];
+      for (let no = 1; no <= requiredCount; no++) {
+        const candidates = roundMatches
+          .filter(m => Number(m.match_no) === no && matchCompleted(m))
+          .sort((a, b) => String(b.updated_at || b.created_at || b.id)
+            .localeCompare(String(a.updated_at || a.created_at || a.id)));
+        if (candidates.length) picked.push(candidates[0]);
+      }
+      return picked;
+    }
 
-    if (currentRound.length && completedCurrent.length === currentRound.length) {
+    let requiredCount = 0;
+    let nextRoundName = null;
+    let pairs = [];
 
-      const winners = completedCurrent
-        .map(matchWinnerId)
-        .filter(Boolean);
+    if (roundKey === "bán kết") {
+      requiredCount = 2;
+      nextRoundName = "Chung kết";
+    } else if (roundKey === "tứ kết") {
+      requiredCount = 4;
+      nextRoundName = "Bán kết";
+    }
 
-      let nextRoundName = null;
-      let pairs = [];
+    if (requiredCount && nextRoundName) {
+      const completedCurrent = pickCompletedByMatchNo(requiredCount);
 
-      if (roundName.toLowerCase() === "bán kết") {
-        // 2 trận bán kết hoàn thành -> tạo đúng 1 trận chung kết.
-        if (winners.length === 2) {
-          nextRoundName = "Chung kết";
-          pairs = [[winners[0], winners[1]]];
-        }
-      } else if (roundName.toLowerCase() === "tứ kết") {
-        // 4 trận tứ kết hoàn thành -> tạo 2 trận bán kết.
-        if (winners.length === 4) {
-          nextRoundName = "Bán kết";
-          pairs = [
-            [winners[0], winners[1]],
-            [winners[2], winners[3]]
-          ];
+      if (completedCurrent.length === requiredCount) {
+        const winners = completedCurrent.map(matchWinnerId).filter(Boolean);
+
+        if (winners.length === requiredCount) {
+          if (roundKey === "bán kết") {
+            // Đúng 2 trận bán kết hoàn thành -> 2 đội thắng vào Chung kết.
+            pairs = [[winners[0], winners[1]]];
+          } else {
+            // 4 trận tứ kết hoàn thành -> tạo 2 trận bán kết.
+            pairs = [
+              [winners[0], winners[1]],
+              [winners[2], winners[3]]
+            ];
+          }
         }
       }
 
-      if (nextRoundName && pairs.length) {
+      if (pairs.length) {
         const alreadyCreated = tournamentMatches.some(m =>
-          String(m.round_name || "").trim() === nextRoundName
+          String(m.round_name || "").trim().toLowerCase() ===
+          nextRoundName.toLowerCase()
         );
 
         if (!alreadyCreated) {
@@ -12140,6 +12064,7 @@ async function advanceTournamentAfterMatch(
             match_no: index + 1,
             team_a: pair[0],
             team_b: pair[1],
+            // Tứ kết, Bán kết và Chung kết đều đánh đến 15.
             target_score: 15,
             status: "scheduled",
             notes: "Tự động từ " + roundName
@@ -12161,6 +12086,8 @@ async function advanceTournamentAfterMatch(
       }
     }
 
+    // Cập nhật ngay màn hình giải sau khi tạo vòng tiếp theo.
+    await renderTournamentPanel();
     return;
   }
 
@@ -12991,6 +12918,326 @@ async function runDatabaseTest() {
 }
 
 
+
+/* =========================================================
+   50. QUẢN TRỊ / ĐĂNG NHẬP / PHÊ DUYỆT
+========================================================= */
+
+async function loadCurrentAdmin(){
+  currentAdmin = null;
+  if(!currentSession?.user?.id) return;
+
+  const { data, error } = await supabaseClient
+    .from("admin_users")
+    .select("user_id, role, club_name, created_at")
+    .eq("user_id", currentSession.user.id)
+    .maybeSingle();
+
+  if(error){
+    console.warn("Không tải được quyền quản trị:", error);
+    return;
+  }
+  currentAdmin = data || null;
+}
+
+function openClubAdminPanel(){
+  openAdminPanel("club_admin");
+}
+
+function openAdminPanel(expectedRole){
+  if(!isLoggedIn()){
+    const isClubLogin = expectedRole === "club_admin";
+    openModal(isClubLogin ? "👑 Đăng nhập Chủ tịch CLB" : "🔐 Đăng nhập Quản trị cấp cao", `
+      <div class="admin-panel">
+        <div class="notice">
+          ${isClubLogin
+            ? "Chủ tịch CLB được tạo giải, gửi đề xuất chấm trình và nhập kết quả các trận của giải do CLB mình tạo."
+            : "Quản trị cấp cao có toàn quyền quản lý giải, kết quả và quyết định điểm trình."}
+        </div>
+        <div class="field">
+          <label>Email quản trị</label>
+          <input id="adminEmail" type="email" autocomplete="username" placeholder="email">
+        </div>
+        <input id="expectedAdminRole" type="hidden" value="${expectedRole || ""}">
+        <div class="field">
+          <label>Mật khẩu</label>
+          <input id="adminPassword" type="password" autocomplete="current-password" placeholder="Mật khẩu">
+        </div>
+        <div class="actions">
+          <button class="btn btn-primary" onclick="adminLogin()">🔐 Đăng nhập</button>
+          <button class="btn btn-secondary" onclick="closeModal()">Đóng</button>
+        </div>
+      </div>
+    `);
+    return;
+  }
+  renderAdminPanel();
+}
+
+async function adminLogin(){
+  const email = document.getElementById("adminEmail")?.value.trim();
+  const password = document.getElementById("adminPassword")?.value || "";
+  if(!email || !password){
+    showToast("Nhập email và mật khẩu.");
+    return;
+  }
+  const { data, error } = await supabaseClient.auth.signInWithPassword({email,password});
+  if(error){
+    showToast("Đăng nhập thất bại: " + error.message);
+    return;
+  }
+  currentSession = data.session;
+  await loadCurrentAdmin();
+  if(!currentAdmin){
+    await supabaseClient.auth.signOut();
+    currentSession = null;
+    showToast("Tài khoản chưa được cấp quyền quản trị.");
+    return;
+  }
+  const expectedRole = document.getElementById("expectedAdminRole")?.value || "";
+  if(expectedRole && currentAdmin.role !== expectedRole){
+    await supabaseClient.auth.signOut();
+    currentSession = null;
+    currentAdmin = null;
+    showToast(expectedRole === "club_admin"
+      ? "Tài khoản này không phải tài khoản Chủ tịch CLB."
+      : "Tài khoản này không phải tài khoản Quản trị cấp cao.");
+    return;
+  }
+  closeModal();
+  renderAdminPanel();
+  updateAdminButton();
+}
+
+async function adminLogout(){
+  await supabaseClient.auth.signOut();
+  currentSession = null;
+  currentAdmin = null;
+  closeModal();
+  updateAdminButton();
+  showToast("Đã đăng xuất quản trị.");
+}
+
+function updateAdminButton(){
+  const clubBtn = document.getElementById("clubAdminButton");
+  const superBtn = document.getElementById("superAdminButton");
+  if(clubBtn){
+    clubBtn.textContent = isClubAdmin() ? "👑 Chủ tịch CLB (đã đăng nhập)" : "👑 Chủ tịch CLB";
+  }
+  if(superBtn){
+    superBtn.textContent = isSuperAdmin() ? "⚙️ Quản trị cấp cao (đã đăng nhập)" : "⚙️ Quản trị";
+  }
+}
+
+async function approveRatingAssessment(id, approve){
+  if(!isSuperAdmin()){
+    showToast("Chỉ quản trị cấp cao mới quyết định điểm trình.");
+    return;
+  }
+  const assessment = window.__pendingAssessments?.find(x => String(x.id) === String(id));
+  if(!assessment){
+    showToast("Không tìm thấy đề xuất.");
+    return;
+  }
+  const member = memberById(assessment.member_id);
+  if(!member){
+    showToast("Không tìm thấy thành viên.");
+    return;
+  }
+
+  if(approve){
+    const newRating = Number(assessment.proposed_rating);
+    const oldRating = Number(member.rating || 1);
+
+    const { error: memberError } = await supabaseClient
+      .from("members")
+      .update({
+        rating: newRating,
+        rating_status: "Đã xác thực",
+        rating_confidence: 1
+      })
+      .eq("id", assessment.member_id);
+
+    if(memberError){
+      showToast("Không thể cập nhật rating: " + memberError.message);
+      return;
+    }
+
+    const { error: historyError } = await supabaseClient
+      .from("rating_history")
+      .insert({
+        member_id: assessment.member_id,
+        old_rating: oldRating,
+        new_rating: newRating,
+        change: newRating - oldRating,
+        reason: "Phê duyệt chấm trình",
+        source: "admin_approval"
+      });
+
+    if(historyError){
+      showToast("Đã cập nhật rating nhưng lỗi lịch sử: " + historyError.message);
+      return;
+    }
+  }
+
+  const { error } = await supabaseClient
+    .from("rating_assessments")
+    .update({
+      status: approve ? "approved" : "rejected",
+      reviewed_by: currentSession.user.id,
+      reviewed_at: new Date().toISOString()
+    })
+    .eq("id", id);
+
+  if(error){
+    showToast("Không thể cập nhật trạng thái đề xuất: " + error.message);
+    return;
+  }
+
+  await refreshApplication();
+  renderAdminPanel();
+  showToast(approve ? "Đã phê duyệt rating." : "Đã từ chối đề xuất.");
+}
+
+async function renderAdminPanel(){
+  if(!isAdmin()){
+    openAdminPanel();
+    return;
+  }
+
+  const { data: assessments, error: assessmentError } = await supabaseClient
+    .from("rating_assessments")
+    .select("*")
+    .eq("status","pending")
+    .order("created_at",{ascending:false});
+
+  if(assessmentError){
+    console.error(assessmentError);
+  }
+
+  window.__pendingAssessments = assessments || [];
+
+  const myTournaments = isSuperAdmin()
+    ? tournaments
+    : tournaments.filter(t => String(t.created_by || "") === String(currentSession.user.id));
+
+  const rows = myTournaments.map(t => {
+    const regs = registrationsForTournament(t.id);
+    const teamCount = regs.length;
+    const participantCount = regs.reduce(
+      (sum, reg) => sum + getRegistrationMembers(reg).length,
+      0
+    );
+    const canDelete = isSuperAdmin();
+    return `
+      <tr>
+        <td><b>${escapeHtml(t.name || "")}</b><br><span class="muted">${formatDate(t.date)}</span></td>
+        <td>${escapeHtml(t.created_club || (t.created_by ? "Đã ghi nhận" : "Giải cũ"))}</td>
+        <td><b>${participantCount}</b> người<br><span class="muted">${teamCount} đội/đăng ký</span><br><span class="muted">💰 ${paidRegistrationsForTournament(t.id).length} đã nộp phí</span></td>
+        <td>${escapeHtml(t.status || "")}</td>
+        <td>
+          <button class="btn btn-secondary" style="padding:6px 9px" onclick="openTournamentDetail('${t.id}')">Xem</button>
+          ${canDelete ? `<button class="btn btn-danger" style="padding:6px 9px" onclick="adminDeleteTournament('${t.id}')">Xoá</button>` : ""}
+        </td>
+      </tr>`;
+  }).join("");
+
+  const pendingHtml = (assessments || []).map(a => {
+    const m = memberById(a.member_id);
+    return `
+      <tr>
+        <td>${escapeHtml(m?.full_name || "Không xác định")}</td>
+        <td>${formatRating(a.proposed_rating)}</td>
+        <td>${Number(a.total_score || 0).toFixed(2)}</td>
+        <td>${formatDate(a.created_at)}</td>
+        <td>
+          ${isSuperAdmin()
+            ? `<button class="btn btn-primary" style="padding:6px 9px" onclick="approveRatingAssessment('${a.id}',true)">✓ Duyệt</button>
+               <button class="btn btn-danger" style="padding:6px 9px" onclick="approveRatingAssessment('${a.id}',false)">Từ chối</button>`
+            : `<span class="admin-role">Chờ quản trị cấp cao</span>`}
+        </td>
+      </tr>`;
+  }).join("");
+
+  openModal("⚙️ " + adminRoleText(), `
+    <div class="admin-panel">
+      <div class="chips">
+        <span class="admin-role">${escapeHtml(adminRoleText())}</span>
+        ${currentAdmin.club_name ? `<span class="chip">CLB: ${escapeHtml(currentAdmin.club_name)}</span>` : ""}
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-secondary" onclick="go('tournaments');closeModal();">🏆 Quản lý giải</button>
+        <button class="btn btn-secondary" onclick="go('rating');closeModal();">📊 Chấm trình</button>
+        <button class="btn btn-danger" onclick="adminLogout()">Đăng xuất</button>
+      </div>
+
+      <h4>🏆 Theo dõi giải đấu</h4>
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead><tr><th>Giải</th><th>CLB</th><th>Đăng ký</th><th>Trạng thái</th><th>Quản lý</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="5">Chưa có giải.</td></tr>`}</tbody>
+        </table>
+      </div>
+
+      <h4 style="margin-top:20px">⭐ Đề xuất chấm trình chờ duyệt</h4>
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead><tr><th>Thành viên</th><th>Điểm đề xuất</th><th>Tổng tự chấm</th><th>Thời gian</th><th>Xử lý</th></tr></thead>
+          <tbody>${pendingHtml || `<tr><td colspan="5">Không có đề xuất chờ duyệt.</td></tr>`}</tbody>
+        </table>
+      </div>
+
+      <div class="notice" style="margin-top:16px">
+        <b>Quyền:</b> Chủ tịch CLB được tạo giải, chấm trình đề xuất và nhập kết quả các trận
+        của giải do mình tạo. Chủ tịch CLB <b>không được xoá giải</b> và không quyết định rating cuối cùng.
+        Quản trị cấp cao có toàn quyền.
+      </div>
+    </div>
+  `);
+}
+
+async function adminDeleteTournament(tournamentId){
+  if(!isSuperAdmin()){
+    showToast("Chủ tịch CLB không được xoá giải.");
+    return;
+  }
+  if(!confirm("Xoá giải này và dữ liệu liên quan? Hành động này không thể hoàn tác.")) return;
+
+  const { error: matchError } = await supabaseClient
+    .from("matches").delete().eq("tournament_id",tournamentId);
+  if(matchError){ showToast("Không thể xoá trận: "+matchError.message); return; }
+
+  const { error: regError } = await supabaseClient
+    .from("tournament_registrations").delete().eq("tournament_id",tournamentId);
+  if(regError){ showToast("Không thể xoá đăng ký: "+regError.message); return; }
+
+  const { error: tournamentError } = await supabaseClient
+    .from("tournaments").delete().eq("id",tournamentId);
+  if(tournamentError){ showToast("Không thể xoá giải: "+tournamentError.message); return; }
+
+  await refreshApplication();
+  renderAdminPanel();
+  showToast("Đã xoá giải.");
+}
+
+async function initAuth(){
+  try{
+    const { data } = await supabaseClient.auth.getSession();
+    currentSession = data.session || null;
+    await loadCurrentAdmin();
+    updateAdminButton();
+
+    supabaseClient.auth.onAuthStateChange(async (_event, session) => {
+      currentSession = session || null;
+      await loadCurrentAdmin();
+      updateAdminButton();
+    });
+  }catch(error){
+    console.error("initAuth:",error);
+  }
+}
+
 /* =========================================================
    50. KHỞI ĐỘNG ỨNG DỤNG
 ========================================================= */
@@ -13041,6 +13288,11 @@ async function initializeApplication() {
 
     }
 
+
+    /*
+     * Khởi tạo đăng nhập/quyền trước khi tải dữ liệu.
+     */
+    await initAuth();
 
     /*
      * Load toàn bộ dữ liệu
