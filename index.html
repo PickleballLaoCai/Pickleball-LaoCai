@@ -13166,6 +13166,16 @@ function openAdminPanel(expectedRole){
     `);
     return;
   }
+
+  // Đã đăng nhập: vẫn phải kiểm tra đúng loại tài khoản trước khi mở panel.
+  // Chủ tịch CLB không được mở khu vực Quản trị cấp cao.
+  if(expectedRole && currentAdmin?.role !== expectedRole){
+    showToast(expectedRole === "club_admin"
+      ? "Tài khoản hiện tại không phải tài khoản Chủ tịch CLB."
+      : "Chỉ Quản trị cấp cao mới được mở khu vực này.");
+    return;
+  }
+
   renderAdminPanel();
 }
 
