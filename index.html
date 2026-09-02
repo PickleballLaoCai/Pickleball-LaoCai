@@ -13004,7 +13004,7 @@ function fillFeedbackTargets(){
 async function loadRatingFeedback(){
   const box = document.getElementById("feedbackPublicList");
   if(!box) return;
-  const { data, error } = await supabaseClient.from("rating_feedback").select("id,sender_name,target_member_id,feedback_type,content,status,reviewer_response,created_at,reviewed_at").order("created_at", { ascending:false }).limit(20);
+  const { data, error } = await supabaseClient.rpc("get_rating_feedback_public", { limit_count: 20 });
   if(error){ console.warn("Không tải được phản ánh trình:", error); box.innerHTML='<div class="empty">Chưa thể tải phản ánh.</div>'; return; }
   box.innerHTML = data?.length ? data.map(x => {
     const target = memberById(x.target_member_id);
@@ -13236,6 +13236,26 @@ async function approveRatingAssessment(id, approve){
   showToast(approve ? "Hội đồng chấm trình đã quyết định điểm trình." : "Đã từ chối đề xuất.");
 }
 
+async function adjustOfficialRating(){
+  if(!isSuperAdmin()){ showToast("Chỉ Hội đồng chấm trình / Quản trị cấp cao mới được điều chỉnh trình chính thức."); return; }
+  const memberId=document.getElementById("manualRatingMember")?.value;
+  const newRating=Number(document.getElementById("manualRatingValue")?.value);
+  const reason=document.getElementById("manualRatingReason")?.value.trim();
+  if(!memberId || !Number.isFinite(newRating) || newRating < 1 || !reason){
+    showToast("Vui lòng chọn thành viên, nhập mức trình mới từ 1,00 và nêu rõ lý do."); return;
+  }
+  if(!confirm(`Điều chỉnh trình chính thức của thành viên này thành ${formatRating(newRating)}?`)) return;
+  const {data,error}=await supabaseClient.rpc("admin_adjust_rating",{
+    p_member_id:Number(memberId),
+    p_new_rating:Number(newRating),
+    p_reason:reason
+  });
+  if(error){ console.error("ADMIN ADJUST RATING:",error); showToast("Không thể điều chỉnh trình: "+error.message); return; }
+  await refreshApplication();
+  renderAdminPanel();
+  showToast("Đã điều chỉnh trình chính thức và lưu lịch sử thay đổi.");
+}
+
 async function respondRatingFeedback(id){
   if(!isSuperAdmin()){ showToast("Chỉ Hội đồng chấm trình / quản trị cấp cao mới được quyết định và trả lời."); return; }
   const item=(window.__pendingRatingFeedback||[]).find(x=>String(x.id)===String(id));
@@ -13383,8 +13403,8 @@ async function renderAdminPanel(){
       <h4 style="margin-top:20px">📝 Phản ánh / Đề nghị xem xét trình</h4>
       <div class="table-wrap">
         <table class="admin-table">
-          <thead><tr><th>Người gửi</th><th>Đối tượng</th><th>Nội dung</th><th>Trạng thái</th><th>Xử lý</th></tr></thead>
-          <tbody>${(feedbackRows || []).map(f => { const target=memberById(f.target_member_id); return `<tr><td>${escapeHtml(f.sender_name||"")}</td><td>${escapeHtml(target?.full_name||"")}</td><td>${escapeHtml(f.content||"")}</td><td>${escapeHtml(f.status||"Đã gửi")}</td><td>${isSuperAdmin()?`<button class="btn btn-primary" style="padding:6px 9px" onclick="respondRatingFeedback('${f.id}')">✍️ Trả lời</button>`:`<span class="admin-role">Hội đồng tiếp nhận</span>`}</td></tr>`; }).join("") || `<tr><td colspan="5">Không có phản ánh đang chờ.</td></tr>`}</tbody>
+          <thead><tr><th>Người gửi</th><th>Đối tượng</th><th>Nội dung</th><th>Trạng thái</th><th>Hội đồng trả lời</th><th>Xử lý</th></tr></thead>
+          <tbody>${(feedbackRows || []).map(f => { const target=memberById(f.target_member_id); return `<tr><td>${escapeHtml(f.sender_name||"")}</td><td>${escapeHtml(target?.full_name||"")}</td><td>${escapeHtml(f.content||"")}</td><td>${escapeHtml(f.status||"Đã gửi")}</td><td>${escapeHtml(f.reviewer_response||"Chưa trả lời")}</td><td>${isSuperAdmin()?`<button class="btn btn-primary" style="padding:6px 9px" onclick="respondRatingFeedback('${f.id}')">✍️ Trả lời</button>`:`<span class="admin-role">Hội đồng tiếp nhận</span>`}</td></tr>`; }).join("") || `<tr><td colspan="6">Không có phản ánh đang chờ.</td></tr>`}</tbody>
         </table>
       </div>
 
