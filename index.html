@@ -11918,6 +11918,13 @@ async function submitMatchResult(matchId) {
 }
 
 
+
+/* FINAL REGRESSION NOTE:
+   updateRatingsAfterMatch() and RPC apply_match_rating are intentionally
+   preserved. Every completed real match continues to update rating/history.
+   BYE matches are excluded from rating by the existing BYE path.
+*/
+
 /* =========================================================
    38. CẬP NHẬT THỐNG KÊ THÀNH VIÊN
 ========================================================= */
@@ -12676,12 +12683,140 @@ async function advanceDoubleElimination(
 
   }
 
+  await ensureDoubleEliminationWinnersNextRound(
+    tournament.id
+  );
+
   await advanceDoubleEliminationProgress(
     tournament.id
   );
 
 }
 
+
+
+async function ensureDoubleEliminationWinnersNextRound(tournamentId){
+
+  const tournament = tournamentById(tournamentId);
+  if(!tournament) return false;
+
+  const tournamentMatches = () =>
+    getTournamentMatches(tournamentId);
+
+  const rounds = tournamentMatches()
+    .filter(m =>
+      /^Nhánh thắng — Vòng \d+$/u.test(
+        String(m.round_name || "")
+      )
+    )
+    .map(m => Number(
+      String(m.round_name).match(/(\d+)$/)?.[1] || 0
+    ))
+    .filter(n => n > 0);
+
+  if(!rounds.length) return false;
+
+  const maxRound = Math.max(...rounds);
+  const currentRoundName =
+    "Nhánh thắng — Vòng " + maxRound;
+
+  const currentRound = tournamentMatches()
+    .filter(m =>
+      m.round_name === currentRoundName
+    )
+    .sort((a,b) =>
+      Number(a.match_no || 0) - Number(b.match_no || 0)
+    );
+
+  if(!currentRound.length || !currentRound.every(matchCompleted)){
+    return false;
+  }
+
+  const winners = currentRound
+    .map(matchWinnerId)
+    .filter(Boolean);
+
+  if(winners.length <= 1) return false;
+
+  const nextRoundName =
+    "Nhánh thắng — Vòng " + (maxRound + 1);
+
+  if(tournamentMatches().some(m =>
+    m.round_name === nextRoundName
+  )){
+    return false;
+  }
+
+  let matchNo = 1;
+
+  for(let i = 0; i < winners.length; i += 2){
+
+    const teamA = winners[i];
+    const teamB = winners[i + 1];
+
+    if(teamB){
+
+      const { data, error } =
+        await supabaseClient
+          .from("matches")
+          .insert({
+            tournament_id: tournamentId,
+            round_name: nextRoundName,
+            match_no: matchNo++,
+            team_a: teamA,
+            team_b: teamB,
+            target_score: 15,
+            status: "scheduled",
+            notes: "Tự động từ " + currentRoundName
+          })
+          .select("*")
+          .single();
+
+      if(error){
+        console.error(
+          "ensureDoubleEliminationWinnersNextRound:",
+          error
+        );
+        throw error;
+      }
+
+      if(data) matches.push(data);
+
+    }else{
+
+      const { data, error } =
+        await supabaseClient
+          .from("matches")
+          .insert({
+            tournament_id: tournamentId,
+            round_name: nextRoundName,
+            match_no: matchNo++,
+            team_a: teamA,
+            team_b: null,
+            target_score: 15,
+            score_a: 15,
+            score_b: 0,
+            status: "completed",
+            notes: "Tự động BYE từ " + currentRoundName +
+                   " — BYE, không tính rating"
+          })
+          .select("*")
+          .single();
+
+      if(error){
+        console.error(
+          "ensureDoubleEliminationWinnersNextRound BYE:",
+          error
+        );
+        throw error;
+      }
+
+      if(data) matches.push(data);
+    }
+  }
+
+  return true;
+}
 
 async function advanceDoubleEliminationProgress(
   tournamentId
@@ -13200,6 +13335,10 @@ async function advanceDoubleEliminationProgress(
     );
   }
 
+
+  await ensureDoubleEliminationWinnersNextRound(
+    tournamentId
+  );
 
   await renderTournamentPanel();
 }
