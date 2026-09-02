@@ -3159,7 +3159,7 @@ function selectedTournamentFormat(){
    5. MODAL
 ========================================================= */
 
-function openModal(title, html){
+function openModal(titleOrHtml, html) {
 
   const modal =
     document.getElementById("modal");
@@ -3170,29 +3170,50 @@ function openModal(title, html){
   const bodyElement =
     document.getElementById("modalBody");
 
-
-  if(!modal){
+  if (!modal || !bodyElement) {
+    console.error("Không tìm thấy modal.");
     return;
   }
 
+  /*
+   * Hỗ trợ cả 2 kiểu:
+   *
+   * openModal("Tiêu đề", "<div>...</div>")
+   *
+   * và:
+   *
+   * openModal("<div>...</div>")
+   */
 
-  if(titleElement){
+  if (
+    html === undefined
+  ) {
 
-    titleElement.textContent =
-      title || "Chi tiết";
+    if (titleElement) {
+      titleElement.textContent = "";
+    }
 
-  }
+    bodyElement.innerHTML =
+      titleOrHtml || "";
 
+  } else {
 
-  if(bodyElement){
+    if (titleElement) {
+      titleElement.textContent =
+        titleOrHtml || "";
+    }
 
     bodyElement.innerHTML =
       html || "";
 
   }
 
+  modal.classList.add("active");
 
-  modal.classList.add("show");
+  /*
+   * Một số CSS dùng display thay vì class
+   */
+  modal.style.display = "flex";
 
 }
 
