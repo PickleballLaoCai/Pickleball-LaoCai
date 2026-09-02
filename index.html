@@ -3068,6 +3068,34 @@ let currentAdmin = null;
 function isLoggedIn(){
   return !!currentSession;
 }
+const ADMIN_PERMISSION_LABELS = {
+  create_tournament: "🏆 Tạo giải đấu",
+  manage_tournament: "⚙️ Quản lý giải của mình",
+  enter_results: "📝 Nhập kết quả trận",
+  confirm_payment: "💳 Xác nhận nộp phí",
+  propose_rating: "📊 Gửi đề xuất chấm trình"
+};
+
+const DEFAULT_CLUB_PERMISSIONS = {
+  create_tournament: true,
+  manage_tournament: true,
+  enter_results: true,
+  confirm_payment: true,
+  propose_rating: true
+};
+
+function normalizeAdminPermissions(raw){
+  const src = (raw && typeof raw === "object") ? raw : {};
+  return Object.keys(ADMIN_PERMISSION_LABELS).reduce((out,key)=>{
+    out[key] = src[key] === true;
+    return out;
+  }, {});
+}
+function hasAdminPermission(permission){
+  if(isSuperAdmin()) return true;
+  if(!isClubAdmin()) return false;
+  return currentAdmin?.permissions?.[permission] === true;
+}
 function isSuperAdmin(){
   return currentAdmin?.role === "super_admin";
 }
@@ -3078,18 +3106,18 @@ function isAdmin(){
   return isSuperAdmin() || isClubAdmin();
 }
 function canCreateTournament(){
-  return isAdmin();
+  return hasAdminPermission("create_tournament");
 }
 function canManageTournament(tournament){
   if(!isAdmin() || !tournament) return false;
   if(isSuperAdmin()) return true;
-  return String(tournament.created_by || "") === String(currentSession?.user?.id || "");
+  return hasAdminPermission("manage_tournament") && String(tournament.created_by || "") === String(currentSession?.user?.id || "");
 }
 function canManageMatch(match){
   if(!isAdmin() || !match) return false;
   if(isSuperAdmin()) return true;
   const t = tournamentById(match.tournament_id);
-  return canManageTournament(t);
+  return hasAdminPermission("enter_results") && canManageTournament(t);
 }
 function adminRoleText(){
   if(isSuperAdmin()) return "Quản trị cấp cao";
@@ -4801,6 +4829,23 @@ document
 
         }
 
+        if(isClubAdmin() && !hasAdminPermission("propose_rating")){
+          alert("Tài khoản Chủ tịch CLB này chưa được cấp quyền gửi đề xuất chấm trình.");
+          return;
+        }
+
+        const { data: existingPending, error: pendingCheckError } = await supabaseClient
+          .from("rating_assessments")
+          .select("id")
+          .eq("member_id", Number(memberId))
+          .eq("status", "pending")
+          .limit(1);
+        if(pendingCheckError) throw pendingCheckError;
+        if(existingPending?.length){
+          alert("Thành viên này đã có một đề xuất chấm trình đang chờ Hội đồng xử lý. Không thể gửi thêm đề xuất trùng.");
+          return;
+        }
+
 
         const technical =
           numberValue(
@@ -6450,7 +6495,7 @@ async function submitPaymentProof(registrationId){
 }
 
 async function confirmRegistrationPayment(registrationId, method="cash", approved=true){
-  if(!isAdmin()){ showToast("Chỉ Chủ tịch CLB hoặc Quản trị mới được xác nhận phí."); return; }
+  if(!hasAdminPermission("confirm_payment")){ showToast("Tài khoản này chưa được cấp quyền xác nhận nộp phí."); return; }
   const reg = registrations.find(r => String(r.id) === String(registrationId));
   if(!reg){ showToast("Không tìm thấy đăng ký."); return; }
   const tournament = tournamentById(reg.tournament_id);
@@ -13046,11 +13091,14 @@ async function loadCurrentAdmin(){
     if(!roleError && roleData){
       const { data: clubData } =
         await supabaseClient.rpc("current_admin_club");
+      const { data: permissionData } =
+        await supabaseClient.rpc("current_admin_permissions");
 
       currentAdmin = {
         user_id: currentSession.user.id,
         role: roleData,
         club_name: clubData || null,
+        permissions: roleData === "super_admin" ? Object.keys(ADMIN_PERMISSION_LABELS).reduce((o,k)=>(o[k]=true,o),{}) : normalizeAdminPermissions(permissionData),
         created_at: null
       };
       return;
@@ -13066,7 +13114,7 @@ async function loadCurrentAdmin(){
   // Fallback cho trường hợp RPC chưa được cache/không khả dụng.
   const { data, error } = await supabaseClient
     .from("admin_users")
-    .select("user_id, role, club_name, created_at")
+    .select("user_id, role, club_name, permissions, created_at")
     .eq("user_id", currentSession.user.id)
     .maybeSingle();
 
@@ -13074,7 +13122,11 @@ async function loadCurrentAdmin(){
     console.warn("Không tải được quyền quản trị:", error);
     return;
   }
-  currentAdmin = data || null;
+  if(data){
+    currentAdmin = { ...data, permissions: data.role === "super_admin" ? Object.keys(ADMIN_PERMISSION_LABELS).reduce((o,k)=>(o[k]=true,o),{}) : normalizeAdminPermissions(data.permissions) };
+  } else {
+    currentAdmin = null;
+  }
 }
 
 function openClubAdminPanel(){
@@ -13172,49 +13224,20 @@ async function approveRatingAssessment(id, approve){
     return;
   }
   const assessment = window.__pendingAssessments?.find(x => String(x.id) === String(id));
-  if(!assessment){
-    showToast("Không tìm thấy đề xuất.");
-    return;
-  }
+  if(!assessment){ showToast("Không tìm thấy đề xuất."); return; }
   const member = memberById(assessment.member_id);
-  if(!member){
-    showToast("Không tìm thấy thành viên.");
-    return;
-  }
+  if(!member){ showToast("Không tìm thấy thành viên."); return; }
 
   if(approve){
     const newRating = Number(assessment.proposed_rating);
-    const oldRating = Number(member.rating || 1);
-
-    const { error: memberError } = await supabaseClient
-      .from("members")
-      .update({
-        rating: newRating,
-        rating_status: "Đã xác thực",
-        rating_confidence: 1
-      })
-      .eq("id", assessment.member_id);
-
-    if(memberError){
-      showToast("Không thể cập nhật rating: " + memberError.message);
-      return;
-    }
-
-    const { error: historyError } = await supabaseClient
-      .from("rating_history")
-      .insert({
-        member_id: assessment.member_id,
-        old_rating: oldRating,
-        new_rating: newRating,
-        change: newRating - oldRating,
-        reason: "Hội đồng chấm trình quyết định",
-        source: "admin_approval"
-      });
-
-    if(historyError){
-      showToast("Đã cập nhật rating nhưng lỗi lịch sử: " + historyError.message);
-      return;
-    }
+    if(!Number.isFinite(newRating) || newRating < 1){ showToast("Điểm đề xuất không hợp lệ."); return; }
+    const reason = `Chốt theo đề xuất tự chấm; tổng điểm tự chấm ${Number(assessment.total_score || 0).toFixed(2)}/10.`;
+    const { error: rpcError } = await supabaseClient.rpc("admin_adjust_rating", {
+      p_member_id:Number(assessment.member_id),
+      p_new_rating:newRating,
+      p_reason:reason
+    });
+    if(rpcError){ showToast("Không thể chốt điểm: " + rpcError.message); return; }
   }
 
   const { error } = await supabaseClient
@@ -13222,7 +13245,9 @@ async function approveRatingAssessment(id, approve){
     .update({
       status: approve ? "approved" : "rejected",
       reviewed_by: currentSession.user.id,
-      reviewed_at: new Date().toISOString()
+      reviewed_at: new Date().toISOString(),
+      reviewer_note: approve ? "Hội đồng chốt theo điểm đề xuất." : "Hội đồng từ chối đề xuất.",
+      rating_applied: approve
     })
     .eq("id", id);
 
@@ -13233,27 +13258,62 @@ async function approveRatingAssessment(id, approve){
 
   await refreshApplication();
   renderAdminPanel();
-  showToast(approve ? "Hội đồng chấm trình đã quyết định điểm trình." : "Đã từ chối đề xuất.");
+  showToast(approve ? "Hội đồng chấm trình đã chốt điểm chính thức." : "Đã từ chối đề xuất.");
 }
 
-async function adjustOfficialRating(){
+async function saveAdminPermissions(userId){
+  if(!isSuperAdmin()){ showToast("Chỉ Quản trị cấp cao mới được cấp/sửa quyền."); return; }
+  const permissions = {};
+  Object.keys(ADMIN_PERMISSION_LABELS).forEach(key=>{
+    permissions[key] = !!document.getElementById("perm_"+key+"_"+userId)?.checked;
+  });
+  const {error}=await supabaseClient.rpc("admin_set_permissions",{
+    p_target_user_id:userId,
+    p_permissions:permissions
+  });
+  if(error){ console.error("SAVE PERMISSIONS:",error); showToast("Không thể lưu quyền: "+error.message); return; }
+  showToast("Đã lưu bộ quyền cho tài khoản Chủ tịch CLB.");
+  await renderAdminPanel();
+}
+
+function openManualRatingModal(memberId, suggestedRating=null, assessmentId=null){
+  if(!isSuperAdmin()){ showToast("Chỉ Hội đồng chấm trình mới được chốt điểm chính thức."); return; }
+  const member=memberById(memberId);
+  if(!member){ showToast("Không tìm thấy thành viên."); return; }
+  const initial = suggestedRating ?? Number(member.rating || 1);
+  openModal("🎯 Chỉnh & chốt trình chính thức", `
+    <div class="admin-panel">
+      <div class="notice"><b>${escapeHtml(member.full_name || "Thành viên")}</b> — trình hiện tại: <b>${formatRating(member.rating || 1)}</b></div>
+      <div class="field"><label>Điểm trình chính thức *</label><input id="manualRatingValue" type="number" min="1" step="0.01" value="${Number(initial).toFixed(2)}"></div>
+      <div class="field"><label>Lý do chốt / điều chỉnh *</label><textarea id="manualRatingReason" rows="4" placeholder="Nêu căn cứ quyết định của Hội đồng..."></textarea></div>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="adjustOfficialRating('${member.id}',${assessmentId ? `'${assessmentId}'` : 'null'})">✅ Chốt điểm chính thức</button>
+        <button class="btn btn-secondary" onclick="closeModal()">Huỷ</button>
+      </div>
+    </div>`);
+}
+
+async function adjustOfficialRating(memberIdArg=null, assessmentId=null){
   if(!isSuperAdmin()){ showToast("Chỉ Hội đồng chấm trình / Quản trị cấp cao mới được điều chỉnh trình chính thức."); return; }
-  const memberId=document.getElementById("manualRatingMember")?.value;
+  const memberId=memberIdArg || document.getElementById("manualRatingMember")?.value;
   const newRating=Number(document.getElementById("manualRatingValue")?.value);
   const reason=document.getElementById("manualRatingReason")?.value.trim();
   if(!memberId || !Number.isFinite(newRating) || newRating < 1 || !reason){
     showToast("Vui lòng chọn thành viên, nhập mức trình mới từ 1,00 và nêu rõ lý do."); return;
   }
-  if(!confirm(`Điều chỉnh trình chính thức của thành viên này thành ${formatRating(newRating)}?`)) return;
+  if(!confirm(`Chốt trình chính thức của thành viên này ở ${formatRating(newRating)}?`)) return;
   const {data,error}=await supabaseClient.rpc("admin_adjust_rating",{
-    p_member_id:Number(memberId),
-    p_new_rating:Number(newRating),
-    p_reason:reason
+    p_member_id:Number(memberId), p_new_rating:Number(newRating), p_reason:reason
   });
   if(error){ console.error("ADMIN ADJUST RATING:",error); showToast("Không thể điều chỉnh trình: "+error.message); return; }
+  if(assessmentId){
+    const {error:ae}=await supabaseClient.from("rating_assessments").update({status:"approved",reviewed_by:currentSession.user.id,reviewed_at:new Date().toISOString(),reviewer_note:reason,rating_applied:true}).eq("id",assessmentId);
+    if(ae){ showToast("Đã chốt rating nhưng chưa cập nhật trạng thái đề xuất: "+ae.message); return; }
+  }
+  closeModal();
   await refreshApplication();
   renderAdminPanel();
-  showToast("Đã điều chỉnh trình chính thức và lưu lịch sử thay đổi.");
+  showToast(`Đã chốt ${formatRating(data?.new_rating ?? newRating)} cho ${escapeHtml(data?.member_name || "thành viên")}.`);
 }
 
 async function respondRatingFeedback(id){
@@ -13297,7 +13357,7 @@ async function renderAdminPanel(){
   if(isSuperAdmin()) {
     const { data: adminRows, error: adminRowsError } = await supabaseClient
       .from("admin_users")
-      .select("user_id, role, club_name, created_at")
+      .select("user_id, role, club_name, permissions, created_at")
       .order("created_at", { ascending:false });
     if(adminRowsError){
       console.warn("Không tải được danh sách quản trị:", adminRowsError);
@@ -13343,9 +13403,10 @@ async function renderAdminPanel(){
         <td>${formatDate(a.created_at)}</td>
         <td>
           ${isSuperAdmin()
-            ? `<button class="btn btn-primary" style="padding:6px 9px" onclick="approveRatingAssessment('${a.id}',true)">✓ Duyệt</button>
+            ? `<button class="btn btn-primary" style="padding:6px 9px" onclick="openManualRatingModal('${a.member_id}',${Number(a.proposed_rating)||1},'${a.id}')">✏️ Chỉnh & chốt</button>
+               <button class="btn btn-secondary" style="padding:6px 9px" onclick="approveRatingAssessment('${a.id}',true)">✓ Chốt đề xuất</button>
                <button class="btn btn-danger" style="padding:6px 9px" onclick="approveRatingAssessment('${a.id}',false)">Từ chối</button>`
-            : `<span class="admin-role">Chờ quản trị cấp cao</span>`}
+            : `<span class="admin-role">Chờ Hội đồng cấp cao</span>`}
         </td>
       </tr>`;
   }).join("");
@@ -13382,6 +13443,23 @@ async function renderAdminPanel(){
         <div class="notice" style="margin-top:10px">
           <b>Tạo tài khoản mới:</b> tạo Email + Mật khẩu trước tại Supabase → Authentication → Users, sau đó gán quyền <b>Quản trị cấp cao</b> hoặc <b>Chủ tịch CLB</b>. Không tạo tài khoản bằng mã frontend để tránh lộ quyền quản trị.
         </div>
+        <h4 style="margin-top:18px">🔐 Phân quyền riêng từng Chủ tịch CLB</h4>
+        <div class="notice">Mỗi tài khoản có thể được cấp <b>5/5, 4/5, 3/5...</b> quyền độc lập. Quản trị cấp cao luôn có toàn quyền.</div>
+        <div class="table-wrap">
+          <table class="admin-table"><thead><tr><th>Tài khoản</th><th>CLB</th><th>Bộ quyền</th><th>Lưu</th></tr></thead><tbody>
+          ${adminUsers.filter(u=>u.role === "club_admin").map(u=>{
+            const perms=normalizeAdminPermissions(u.permissions);
+            return `<tr><td><code>${escapeHtml(u.user_id||"")}</code></td><td>${escapeHtml(u.club_name||"Chưa gán CLB")}</td><td><div style="display:grid;gap:5px">${Object.entries(ADMIN_PERMISSION_LABELS).map(([key,label])=>`<label style="font-weight:400"><input id="perm_${key}_${u.user_id}" type="checkbox" ${perms[key]?'checked':''}> ${label}</label>`).join("")}</div></td><td><button class="btn btn-primary" style="padding:6px 9px" onclick="saveAdminPermissions('${u.user_id}')">💾 Lưu quyền</button></td></tr>`;
+          }).join("") || `<tr><td colspan="4">Chưa có tài khoản Chủ tịch CLB.</td></tr>`}
+          </tbody></table>
+        </div>
+        <h4 style="margin-top:18px">🎯 Điều chỉnh trình chính thức</h4>
+        <div class="form-grid">
+          <div class="field"><label>Thành viên</label><select id="manualRatingMember"><option value="">-- Chọn thành viên --</option>${members.map(m=>`<option value="${esc(m.id)}">${esc(m.full_name||"Không tên")} — ${formatRating(m.rating)}</option>`).join("")}</select></div>
+          <div class="field"><label>Trình mới</label><input id="manualRatingValue" type="number" min="1" step="0.01" placeholder="Ví dụ 3,86"></div>
+        </div>
+        <div class="field"><label>Lý do điều chỉnh / quyết định của Hội đồng</label><textarea id="manualRatingReason" rows="3" placeholder="Nêu rõ căn cứ..."></textarea></div>
+        <button class="btn btn-primary" onclick="adjustOfficialRating()">✅ Chốt điểm chính thức</button>
       ` : ""}
 
       <h4>🏆 Theo dõi giải đấu</h4>
@@ -13409,9 +13487,7 @@ async function renderAdminPanel(){
       </div>
 
       <div class="notice" style="margin-top:16px">
-        <b>Quyền:</b> Chủ tịch CLB được tạo giải, chấm trình đề xuất và nhập kết quả các trận
-        của giải do mình tạo. Chủ tịch CLB <b>không được xoá giải</b> và không quyết định rating cuối cùng.
-        Quản trị cấp cao có toàn quyền.
+        <b>Quyền:</b> Chủ tịch CLB chỉ thực hiện được các tác vụ đã được Quản trị cấp cao cấp riêng. Chủ tịch CLB <b>không được xoá giải</b> và không quyết định rating cuối cùng. Quản trị cấp cao có toàn quyền.
       </div>
     </div>
   `);
