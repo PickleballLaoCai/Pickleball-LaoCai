@@ -29,8 +29,12 @@
   --green:#16834b;
   --green-dark:#075c34;
   --green-light:#e6f6ee;
-  --green-soft:#f5fbf7;
-  --green-border:#cfe5d9;
+  --green-soft:#fff5fb;
+  --green-border:#f0cfe1;
+
+  --pink:#e83e8c;
+  --pink-dark:#b91f68;
+  --pink-light:#ffe6f1;
 
   --text:#173026;
   --muted:#6a7b73;
@@ -76,7 +80,7 @@ body{
   background:
     linear-gradient(
       180deg,
-      #edf9f3 0,
+      #fff0f7 0,
       #ffffff 460px
     );
 
@@ -117,7 +121,7 @@ img{
 
   z-index:100;
 
-  background:var(--green-dark);
+  background:var(--pink-dark);
 
   color:#fff;
 
@@ -461,7 +465,7 @@ textarea{
 
 .btn-primary{
 
-  background:var(--green);
+  background:var(--pink);
 
   color:#fff;
 
@@ -5677,19 +5681,24 @@ async function updateRatingsAfterMatch(
   */
 
 
-  const teamA =
-    Array.isArray(
-      match.team_a_members
-    )
-      ? match.team_a_members
+  /*
+    Trận đấu trong DB chỉ lưu team_a/team_b là ID của
+    tournament_registration. Vì vậy phải lấy thành viên
+    từ registration trước khi tính Elo.
+  */
+  const regA = getMatchRegistration(match.team_a);
+  const regB = getMatchRegistration(match.team_b);
+
+  const teamA = Array.isArray(match.team_a_members)
+    ? match.team_a_members.filter(Boolean)
+    : regA
+      ? [regA.member_id, regA.member2_id, regA.member_2_id, regA.partner_member_id].filter(Boolean)
       : [];
 
-
-  const teamB =
-    Array.isArray(
-      match.team_b_members
-    )
-      ? match.team_b_members
+  const teamB = Array.isArray(match.team_b_members)
+    ? match.team_b_members.filter(Boolean)
+    : regB
+      ? [regB.member_id, regB.member2_id, regB.member_2_id, regB.partner_member_id].filter(Boolean)
       : [];
 
 
@@ -10514,7 +10523,7 @@ async function generateEliminationMatches(
 
         team_b: pair[1].registration_id,
 
-        target_score: 13,
+        target_score: 15,
 
         status: "scheduled",
 
@@ -12078,6 +12087,79 @@ async function advanceTournamentAfterMatch(
    * Bảng xếp hạng sẽ được tính từ toàn bộ kết quả.
    */
   if (tournament.format === "group_stage") {
+
+    // Vòng loại trực tiếp từ vòng bảng: tự động tạo vòng kế tiếp
+    // sau khi TẤT CẢ trận của vòng hiện tại đã có kết quả.
+    const tournamentMatches = matches.filter(m =>
+      String(m.tournament_id) === String(tournament.id)
+    );
+
+    const roundName = String(match.round_name || "").trim();
+    const currentRound = tournamentMatches.filter(m =>
+      String(m.round_name || "").trim() === roundName &&
+      !String(m.notes || "").toUpperCase().includes("BYE")
+    );
+
+    const completedCurrent = currentRound.filter(matchCompleted);
+
+    if (currentRound.length && completedCurrent.length === currentRound.length) {
+
+      const winners = completedCurrent
+        .map(matchWinnerId)
+        .filter(Boolean);
+
+      let nextRoundName = null;
+      let pairs = [];
+
+      if (roundName.toLowerCase() === "bán kết") {
+        // 2 trận bán kết hoàn thành -> tạo đúng 1 trận chung kết.
+        if (winners.length === 2) {
+          nextRoundName = "Chung kết";
+          pairs = [[winners[0], winners[1]]];
+        }
+      } else if (roundName.toLowerCase() === "tứ kết") {
+        // 4 trận tứ kết hoàn thành -> tạo 2 trận bán kết.
+        if (winners.length === 4) {
+          nextRoundName = "Bán kết";
+          pairs = [
+            [winners[0], winners[1]],
+            [winners[2], winners[3]]
+          ];
+        }
+      }
+
+      if (nextRoundName && pairs.length) {
+        const alreadyCreated = tournamentMatches.some(m =>
+          String(m.round_name || "").trim() === nextRoundName
+        );
+
+        if (!alreadyCreated) {
+          const rows = pairs.map((pair, index) => ({
+            tournament_id: tournament.id,
+            round_name: nextRoundName,
+            match_no: index + 1,
+            team_a: pair[0],
+            team_b: pair[1],
+            target_score: 15,
+            status: "scheduled",
+            notes: "Tự động từ " + roundName
+          }));
+
+          const { data: nextMatches, error: nextError } =
+            await supabaseClient
+              .from("matches")
+              .insert(rows)
+              .select("*");
+
+          if (nextError) {
+            console.error("Không tạo được vòng kế tiếp:", nextError);
+            throw nextError;
+          }
+
+          matches = matches.concat(nextMatches || []);
+        }
+      }
+    }
 
     return;
   }
