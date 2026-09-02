@@ -7120,6 +7120,31 @@ if (
 
   let scheduleHtml = "";
 
+  const nextMatch = tournamentMatches.find(m =>
+    m.status !== "completed" &&
+    m.status !== "finished" &&
+    m.team_a &&
+    m.team_b
+  );
+
+  const nextMatchHtml = nextMatch ? `
+    <div class="notice" style="margin-bottom:12px;">
+      <strong>➡️ Trận tiếp theo</strong>
+      <div style="margin-top:6px;">
+        ${escapeHtml(getMatchSideName(nextMatch.team_a))}
+        <strong> VS </strong>
+        ${escapeHtml(getMatchSideName(nextMatch.team_b))}
+      </div>
+      <div class="muted" style="margin-top:4px;">
+        ${escapeHtml(nextMatch.round_name || "Vòng đấu")} · Trận ${escapeHtml(String(nextMatch.match_no || ""))}
+        · Đánh đến ${Number(nextMatch.target_score || 11)} điểm
+      </div>
+      <div class="row-actions" style="margin-top:8px;">
+        <button class="btn primary" onclick="openMatchResultModal('${nextMatch.id}')">Nhập kết quả trận tiếp theo</button>
+      </div>
+    </div>
+  ` : "";
+
 
   if (!tournamentMatches.length) {
 
@@ -7141,6 +7166,8 @@ if (
   } else {
 
     scheduleHtml = `
+
+      ${nextMatchHtml}
 
       <div class="match-summary">
 
@@ -7367,131 +7394,56 @@ if (
 
   /* =====================================================
      BẢNG XẾP HẠNG CHIA BẢNG
+     - Tách riêng từng Bảng A/B/C/D
+     - Tính Tr, Thắng, Thua, Điểm, Ghi, Thua, Hiệu số
   ===================================================== */
 
   let standingsHtml = "";
 
+  if (tournament.format === "group_stage") {
+    const groupStandings = calculateGroupStandingsForTournament(tournament.id);
 
-  if (
-    tournament.format ===
-    "group_stage"
-  ) {
-
-    const standings =
-      calculateStandings(
-        tournament.id
-      );
-
-
-    standingsHtml = `
-
-      <h3>
-        📊 Bảng xếp hạng
-      </h3>
-
-
-      ${
-        standings.length
-          ? `
-
-            <div class="table-wrap">
-
-              <table>
-
-                <thead>
-
-                  <tr>
-
-                    <th>#</th>
-
-                    <th>
-                      Người/Đội
-                    </th>
-
-                    <th>Tr</th>
-
-                    <th>T</th>
-
-                    <th>B</th>
-
-                    <th>Điểm</th>
-
-                    <th>HS</th>
-
-                  </tr>
-
-                </thead>
-
-
-                <tbody>
-
-                  ${
-                    standings
-                      .map((item, index) => `
-
-                        <tr>
-
-                          <td>
-                            ${index + 1}
-                          </td>
-
-                          <td>
-                            <strong>
-                              ${escapeHtml(
-                                item.name
-                              )}
-                            </strong>
-                          </td>
-
-                          <td>
-                            ${item.played}
-                          </td>
-
-                          <td>
-                            ${item.wins}
-                          </td>
-
-                          <td>
-                            ${item.losses}
-                          </td>
-
-                          <td>
-                            <strong>
-                              ${item.points}
-                            </strong>
-                          </td>
-
-                          <td>
-                            ${
-                              item.diff > 0
-                                ? "+"
-                                : ""
-                            }
-                            ${item.diff}
-                          </td>
-
-                        </tr>
-
-                      `)
-                      .join("")
-                  }
-
-                </tbody>
-
-              </table>
-
+    if (!groupStandings.length) {
+      standingsHtml = `<div class="empty">Chưa có dữ liệu bảng xếp hạng.</div>`;
+    } else {
+      standingsHtml = `
+        <div class="group-standings-list">
+          ${groupStandings.map(group => `
+            <div class="card" style="margin-top:12px;">
+              <div class="section-title">
+                📊 ${escapeHtml(group.name)}
+                <span class="chip">${group.rows.length} đội</span>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>#</th><th>Người/Đội</th><th>Tr</th><th>Thắng</th><th>Thua</th>
+                      <th>Điểm</th><th>Ghi</th><th>Thua</th><th>HS</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${group.rows.map((item, index) => `
+                      <tr>
+                        <td><strong>${index + 1}</strong></td>
+                        <td><strong>${escapeHtml(item.name)}</strong></td>
+                        <td>${item.played}</td>
+                        <td>${item.wins}</td>
+                        <td>${item.losses}</td>
+                        <td><strong>${item.points}</strong></td>
+                        <td>${item.scoreFor}</td>
+                        <td>${item.scoreAgainst}</td>
+                        <td><strong>${item.diff > 0 ? "+" : ""}${item.diff}</strong></td>
+                      </tr>
+                    `).join("")}
+                  </tbody>
+                </table>
+              </div>
             </div>
-
-          `
-          : `
-            <div class="empty">
-              Chưa có dữ liệu xếp hạng.
-            </div>
-          `
-      }
-
-    `;
-
+          `).join("")}
+        </div>
+      `;
+    }
   }
 
 
@@ -11185,6 +11137,70 @@ function renderResultMatches() {
    34. RENDER KẾT QUẢ / BẢNG XẾP HẠNG
 ========================================================= */
 
+function calculateGroupStandingsForTournament(tournamentId) {
+
+  const groupMatches = matches.filter(m =>
+    String(m.tournament_id) === String(tournamentId) &&
+    String(m.notes || "") === "Vòng bảng"
+  );
+
+  const groupNames = [...new Set(
+    groupMatches.map(m => String(m.round_name || "").trim()).filter(Boolean)
+  )].sort((a, b) => a.localeCompare(b, "vi", { numeric: true }));
+
+  return groupNames.map(groupName => {
+    const rows = {};
+    const groupMatchesOnly = groupMatches.filter(m =>
+      String(m.round_name || "") === groupName
+    );
+    const teamIds = new Set();
+
+    groupMatchesOnly.forEach(m => {
+      if (m.team_a) teamIds.add(String(m.team_a));
+      if (m.team_b) teamIds.add(String(m.team_b));
+    });
+
+    registrationsForTournament(tournamentId).forEach(reg => {
+      if (!teamIds.has(String(reg.id))) return;
+      rows[String(reg.id)] = {
+        registration_id: reg.id,
+        name: getTeamDisplayName(reg),
+        played: 0, wins: 0, losses: 0, draws: 0, points: 0,
+        scoreFor: 0, scoreAgainst: 0, diff: 0
+      };
+    });
+
+    groupMatchesOnly.filter(matchCompleted).forEach(m => {
+      const a = rows[String(m.team_a)];
+      const b = rows[String(m.team_b)];
+      if (!a || !b) return;
+
+      const sa = Number(m.score_a);
+      const sb = Number(m.score_b);
+      if (!Number.isFinite(sa) || !Number.isFinite(sb)) return;
+
+      a.played++; b.played++;
+      a.scoreFor += sa; a.scoreAgainst += sb;
+      b.scoreFor += sb; b.scoreAgainst += sa;
+
+      if (sa > sb) {
+        a.wins++; b.losses++; a.points += 3;
+      } else if (sb > sa) {
+        b.wins++; a.losses++; b.points += 3;
+      } else {
+        a.draws++; b.draws++; a.points++; b.points++;
+      }
+    });
+
+    return {
+      name: groupName,
+      rows: Object.values(rows)
+        .map(row => ({ ...row, diff: row.scoreFor - row.scoreAgainst }))
+        .sort(compareStandingItems)
+    };
+  });
+}
+
 function calculateStandings(tournamentId) {
 
   const tournament =
@@ -11537,7 +11553,7 @@ function openMatchResultModal(matchId) {
 
 async function submitMatchResult(matchId) {
 
-  const match =
+  let match =
     matches.find(m =>
       String(m.id) === String(matchId)
     );
@@ -11620,31 +11636,31 @@ async function submitMatchResult(matchId) {
 
     showToast("Đang lưu kết quả...");
 
-    const { error } = await supabaseClient
+    const { data: savedMatch, error } = await supabaseClient
       .from("matches")
       .update({
-
         score_a: scoreA,
-
         score_b: scoreB,
-
         status: "completed",
-
-        notes: notes
-
+        notes: notes || match.notes || ""
       })
-      .eq("id", matchId);
+      .eq("id", matchId)
+      .select("*")
+      .single();
 
     if (error) throw error;
 
-
-    /*
-     * Cập nhật local trước
-     */
-    match.score_a = scoreA;
-    match.score_b = scoreB;
-    match.status = "completed";
-    match.notes = notes;
+    const localIndex = matches.findIndex(m => String(m.id) === String(matchId));
+    if (localIndex >= 0) {
+      matches[localIndex] = savedMatch || {
+        ...matches[localIndex],
+        score_a: scoreA,
+        score_b: scoreB,
+        status: "completed",
+        notes: notes || matches[localIndex].notes || ""
+      };
+      match = matches[localIndex];
+    }
 
 
     /*
@@ -12339,449 +12355,244 @@ async function advanceDoubleEliminationProgress(
   tournamentId
 ){
 
-  const tournament =
-    tournamentById(tournamentId);
-
+  const tournament = tournamentById(tournamentId);
   if(!tournament) return;
 
-  const all =
-    getTournamentMatches(tournamentId);
+  const all = () => getTournamentMatches(tournamentId);
 
-  const wb =
-    all.filter(m =>
-      String(m.round_name || "")
-        .toLowerCase()
-        .includes("nhánh thắng")
+  /*
+   * Double Elimination được điều phối theo trạng thái thực tế của từng vòng:
+   * - Winners: đội thắng đi tiếp, đội thua lần đầu xuống Losers.
+   * - Losers: đội đang có 1 trận thua tiếp tục đấu; thua lần 2 bị loại.
+   * - Khi số đội lẻ, hệ thống tạo BYE và tự cho đội đó đi tiếp.
+   * - Không dùng Math.min để làm mất đội chưa bị loại.
+   */
+
+  const createBye = async (roundName, teamId, matchNo, targetScore, notes) => {
+    if(!teamId) return null;
+
+    const existing = all().find(m =>
+      m.round_name === roundName &&
+      String(m.team_a) === String(teamId) &&
+      !m.team_b
     );
+    if(existing) return existing;
 
-  const lb =
-    all.filter(m =>
-      String(m.round_name || "")
-        .toLowerCase()
-        .includes("nhánh thua")
-    );
+    const { data, error } = await supabaseClient
+      .from("matches")
+      .insert({
+        tournament_id: tournamentId,
+        round_name: roundName,
+        match_no: matchNo,
+        team_a: teamId,
+        team_b: null,
+        target_score: targetScore,
+        score_a: targetScore,
+        score_b: 0,
+        status: "completed",
+        notes: (notes || "") + " — BYE, không tính rating"
+      })
+      .select()
+      .single();
 
-  /* -------------------------------------------------------
-     1. NHÁNH THẮNG: nếu một vòng đã hoàn thành toàn bộ,
-        tạo vòng kế tiếp.
-  ------------------------------------------------------- */
-
-  const wbRounds = {};
-
-  wb.forEach(m => {
-
-    const key =
-      String(m.round_name || "");
-
-    if(!wbRounds[key]) wbRounds[key] = [];
-
-    wbRounds[key].push(m);
-
-  });
-
-  const wbRoundNames =
-    Object.keys(wbRounds)
-      .sort((a,b) => {
-
-        const na = Number(
-          a.match(/(\d+)\s*$/)?.[1] || 0
-        );
-
-        const nb = Number(
-          b.match(/(\d+)\s*$/)?.[1] || 0
-        );
-
-        return na - nb;
-
-      });
-
-  for(const roundName of wbRoundNames){
-
-    const roundMatches =
-      wbRounds[roundName];
-
-    if(!roundMatches.length) continue;
-
-    if(!roundMatches.every(matchCompleted)) continue;
-
-    const roundNo =
-      Number(
-        roundName.match(/(\d+)\s*$/)?.[1] || 1
-      );
-
-    const winners =
-      roundMatches
-        .map(matchWinnerId)
-        .filter(Boolean);
-
-    if(winners.length <= 1){
-
-      /* Đã có nhà vô địch nhánh thắng. */
-      continue;
-
+    if(error){
+      console.error("createBye:", error);
+      return null;
     }
 
-    const nextRound =
-      roundNo + 1;
+    matches.push(data);
+    return data;
+  };
 
-    const nextRoundName =
-      "Nhánh thắng — Vòng " + nextRound;
+  const createPairings = async (roundName, teamIds, targetScore, notes) => {
+    const ids = teamIds.filter(Boolean);
+    if(!ids.length) return;
 
-    const existingNext =
-      all.filter(m =>
-        m.round_name === nextRoundName
-      );
+    const existing = all().filter(m => m.round_name === roundName);
+    if(existing.length) return;
 
-    if(existingNext.length) continue;
+    let matchNo = 1;
+    for(let i = 0; i < ids.length; i += 2){
+      const a = ids[i];
+      const b = ids[i + 1];
 
-    for(let i = 0; i < winners.length; i += 2){
+      if(b){
+        await insertScheduledMatch(
+          tournamentId,
+          roundName,
+          a,
+          b,
+          matchNo++,
+          targetScore,
+          notes
+        );
+      }else{
+        await createBye(
+          roundName,
+          a,
+          matchNo++,
+          targetScore,
+          notes
+        );
+      }
+    }
+  };
 
-      const teamA = winners[i];
-      const teamB = winners[i + 1];
+  /* -------------------------------------------------------
+     1. XỬ LÝ CÁC VÒNG WINNERS
+  ------------------------------------------------------- */
+  for(let roundNo = 1; roundNo <= 30; roundNo++){
 
-      if(!teamB) continue;
+    const roundName = "Nhánh thắng — Vòng " + roundNo;
+    const roundMatches = all().filter(m => m.round_name === roundName);
+    if(!roundMatches.length) continue;
+    if(!roundMatches.every(matchCompleted)) continue;
 
-      await insertScheduledMatch(
-        tournamentId,
+    const winners = roundMatches.map(matchWinnerId).filter(Boolean);
+
+    /* Chỉ còn 1 đội ở Winners => nhà vô địch Winners. */
+    if(winners.length <= 1) break;
+
+    const nextRoundName = "Nhánh thắng — Vòng " + (roundNo + 1);
+    const existingNext = all().filter(m => m.round_name === nextRoundName);
+
+    if(!existingNext.length){
+      await createPairings(
         nextRoundName,
-        teamA,
-        teamB,
-        i / 2 + 1,
+        winners,
         15,
         "Tự động từ nhánh thắng"
       );
-
     }
 
+    /* Chỉ tạo một vòng Winners mỗi lần; kết quả vòng mới sẽ kích hoạt lần sau. */
     break;
-
   }
 
+  /* -------------------------------------------------------
+     2. LOSERS VÒNG 1 = CÁC ĐỘI THUA Ở WINNERS VÒNG 1
+  ------------------------------------------------------- */
+  const wb1 = all().filter(m => m.round_name === "Nhánh thắng — Vòng 1");
+
+  if(wb1.length && wb1.every(matchCompleted)){
+
+    const losers = wb1
+      .map(matchLoserId)
+      .filter(Boolean)
+      .filter(id => !teamHasTwoLosses(tournamentId, id));
+
+    const lb1 = all().filter(m => m.round_name === "Nhánh thua — Vòng 1");
+
+    if(!lb1.length && losers.length){
+      await createPairings(
+        "Nhánh thua — Vòng 1",
+        losers,
+        15,
+        "Đội thua lần 1 từ nhánh thắng"
+      );
+    }
+  }
 
   /* -------------------------------------------------------
-     2. NHÁNH THUA:
-        LB1 = các đội thua WB1 ghép với nhau.
-        LB2 trở đi = thắng LB trước gặp đội thua WB
-        của vòng tương ứng.
+     3. LOSERS VÒNG 2+.
+        Winner LB trước + loser WB vòng kế tiếp.
+        Nếu tổng số đội lẻ -> BYE, không làm mất đội.
   ------------------------------------------------------- */
+  for(let lbNo = 1; lbNo <= 30; lbNo++){
 
-  const refreshed =
-    getTournamentMatches(tournamentId);
+    const currentLBName = "Nhánh thua — Vòng " + lbNo;
+    const currentLB = all().filter(m => m.round_name === currentLBName);
+    if(!currentLB.length || !currentLB.every(matchCompleted)) continue;
 
-  const wbCompletedRounds =
-    refreshed
-      .filter(m =>
-        String(m.round_name || "")
-          .toLowerCase()
-          .includes("nhánh thắng") &&
-        matchCompleted(m)
-      )
-      .reduce((set,m) => {
+    const wbNextName = "Nhánh thắng — Vòng " + (lbNo + 1);
+    const wbNext = all().filter(m => m.round_name === wbNextName);
+    if(!wbNext.length || !wbNext.every(matchCompleted)) continue;
 
-        const no =
-          Number(
-            String(m.round_name || "")
-              .match(/(\d+)\s*$/)?.[1] || 1
-          );
+    const lbWinners = currentLB.map(matchWinnerId).filter(Boolean);
+    const wbLosers = wbNext
+      .map(matchLoserId)
+      .filter(Boolean)
+      .filter(id => !teamHasTwoLosses(tournamentId, id));
 
-        set.add(no);
+    /*
+     * Trộn theo cặp xen kẽ để tránh một nhánh bị dồn.
+     * Trong trường hợp cuối nhánh có số lượng lệch, BYE giữ lại đội.
+     */
+    const entrants = [];
+    const max = Math.max(lbWinners.length, wbLosers.length);
+    for(let i = 0; i < max; i++){
+      if(lbWinners[i]) entrants.push(lbWinners[i]);
+      if(wbLosers[i]) entrants.push(wbLosers[i]);
+    }
 
-        return set;
+    const nextLBName = "Nhánh thua — Vòng " + (lbNo + 1);
+    if(!all().some(m => m.round_name === nextLBName) && entrants.length){
+      await createPairings(
+        nextLBName,
+        entrants,
+        15,
+        "Tự động: đội thắng nhánh thua gặp đội thua nhánh thắng"
+      );
+    }
+  }
 
-      }, new Set());
+  /* -------------------------------------------------------
+     4. GRAND FINAL
+  ------------------------------------------------------- */
+  const current = all();
+  const wbRounds = current
+    .filter(m => String(m.round_name || "").startsWith("Nhánh thắng — Vòng "))
+    .reduce((set,m) => {
+      const n = Number(String(m.round_name).match(/(\d+)\s*$/)?.[1] || 0);
+      if(n) set.add(n);
+      return set;
+    }, new Set());
 
-  const lbRounds = {};
-
-  refreshed
-    .filter(m =>
-      String(m.round_name || "")
-        .toLowerCase()
-        .includes("nhánh thua")
-    )
-    .forEach(m => {
-
-      const key = String(m.round_name || "");
-
-      if(!lbRounds[key]) lbRounds[key] = [];
-
-      lbRounds[key].push(m);
-
-    });
-
-  /* Tạo LB1 khi WB1 hoàn tất. */
-  const wb1 =
-    refreshed.filter(m =>
-      m.round_name === "Nhánh thắng — Vòng 1"
+  const maxWB = Math.max(0, ...wbRounds);
+  if(maxWB > 0){
+    const wbFinal = current.filter(m =>
+      m.round_name === "Nhánh thắng — Vòng " + maxWB
     );
 
-  if(
-    wb1.length &&
-    wb1.every(matchCompleted)
-  ){
+    if(wbFinal.length === 1 && matchCompleted(wbFinal[0])){
+      const winnersChampion = matchWinnerId(wbFinal[0]);
 
-    const losers =
-      wb1
-        .map(matchLoserId)
-        .filter(Boolean)
-        .filter(id =>
-          !teamHasTwoLosses(
-            tournamentId,
-            id
-          )
-        );
+      const lbCompleted = current
+        .filter(m => String(m.round_name || "").startsWith("Nhánh thua — Vòng "))
+        .filter(matchCompleted)
+        .sort((a,b) => {
+          const na = Number(String(a.round_name).match(/(\d+)\s*$/)?.[1] || 0);
+          const nb = Number(String(b.round_name).match(/(\d+)\s*$/)?.[1] || 0);
+          return nb - na || Number(b.match_no || 0) - Number(a.match_no || 0);
+        });
 
-    const lb1 =
-      refreshed.filter(m =>
-        m.round_name === "Nhánh thua — Vòng 1"
-      );
+      const latestLB = lbCompleted.length ? lbCompleted[0] : null;
+      const losersChampion = latestLB ? matchWinnerId(latestLB) : null;
 
-    if(!lb1.length){
-
-      for(let i = 0; i < losers.length; i += 2){
-
-        const teamA = losers[i];
-        const teamB = losers[i + 1];
-
-        if(!teamB) continue;
+      if(winnersChampion && losersChampion &&
+         String(winnersChampion) !== String(losersChampion) &&
+         !current.some(m => m.round_name === "Grand Final")){
 
         await insertScheduledMatch(
           tournamentId,
-          "Nhánh thua — Vòng 1",
-          teamA,
-          teamB,
-          i / 2 + 1,
+          "Grand Final",
+          winnersChampion,
+          losersChampion,
+          1,
           15,
-          "Đội thua lần 1 từ nhánh thắng"
+          "Chung kết Double Elimination"
         );
-
       }
-
     }
-
-  }
-
-
-  /* LB2 trở đi:
-     Khi LBn hoàn tất và WB(n+1) hoàn tất,
-     lấy winner LBn + loser WB(n+1). */
-  for(let lbNo = 1; lbNo <= 20; lbNo++){
-
-    const currentLB =
-      getTournamentMatches(tournamentId)
-        .filter(m =>
-          m.round_name ===
-          "Nhánh thua — Vòng " + lbNo
-        );
-
-    if(!currentLB.length) continue;
-
-    if(!currentLB.every(matchCompleted)) continue;
-
-    const wbNext =
-      getTournamentMatches(tournamentId)
-        .filter(m =>
-          m.round_name ===
-          "Nhánh thắng — Vòng " + (lbNo + 1)
-        );
-
-    if(!wbNext.length || !wbNext.every(matchCompleted)) continue;
-
-    const lbWinners =
-      currentLB
-        .map(matchWinnerId)
-        .filter(Boolean);
-
-    const wbLosers =
-      wbNext
-        .map(matchLoserId)
-        .filter(Boolean)
-        .filter(id =>
-          !teamHasTwoLosses(
-            tournamentId,
-            id
-          )
-        );
-
-    const nextLBNo =
-      lbNo + 1;
-
-    const nextLBName =
-      "Nhánh thua — Vòng " + nextLBNo;
-
-    const exists =
-      getTournamentMatches(tournamentId)
-        .filter(m =>
-          m.round_name === nextLBName
-        );
-
-    if(exists.length) continue;
-
-    const pairs =
-      Math.min(
-        lbWinners.length,
-        wbLosers.length
-      );
-
-    for(let i = 0; i < pairs; i++){
-
-      await insertScheduledMatch(
-        tournamentId,
-        nextLBName,
-        lbWinners[i],
-        wbLosers[i],
-        i + 1,
-        15,
-        "Tự động: thắng nhánh thua gặp đội thua nhánh thắng"
-      );
-
-    }
-
-  }
-
-
-  /* -------------------------------------------------------
-     3. GRAND FINAL
-  ------------------------------------------------------- */
-
-  const current =
-    getTournamentMatches(tournamentId);
-
-  const wbAll =
-    current.filter(m =>
-      String(m.round_name || "")
-        .toLowerCase()
-        .includes("nhánh thắng")
-    );
-
-  const wbFinalCandidates =
-    wbAll.filter(m => {
-
-      const roundNo =
-        Number(
-          String(m.round_name || "")
-            .match(/(\d+)\s*$/)?.[1] || 0
-        );
-
-      return roundNo > 0;
-
-    });
-
-  const maxWbRound =
-    wbFinalCandidates.reduce(
-      (max,m) => {
-
-        const no =
-          Number(
-            String(m.round_name || "")
-              .match(/(\d+)\s*$/)?.[1] || 0
-          );
-
-        return Math.max(max,no);
-
-      },
-      0
-    );
-
-  const wbFinal =
-    current.filter(m =>
-      m.round_name ===
-      "Nhánh thắng — Vòng " + maxWbRound
-    );
-
-  if(
-    wbFinal.length === 1 &&
-    matchCompleted(wbFinal[0])
-  ){
-
-    const winnersChampion =
-      matchWinnerId(
-        wbFinal[0]
-      );
-
-    const latestLB =
-      current
-        .filter(m =>
-          String(m.round_name || "")
-            .toLowerCase()
-            .includes("nhánh thua")
-        )
-        .sort((a,b) => {
-
-          const na =
-            Number(
-              String(a.round_name || "")
-                .match(/(\d+)\s*$/)?.[1] || 0
-            );
-
-          const nb =
-            Number(
-              String(b.round_name || "")
-                .match(/(\d+)\s*$/)?.[1] || 0
-            );
-
-          return nb - na;
-
-        });
-
-    const latestLBCompleted =
-      latestLB.find(matchCompleted);
-
-    if(
-      winnersChampion &&
-      latestLBCompleted
-    ){
-
-      const losersChampion =
-        matchWinnerId(
-          latestLBCompleted
-        );
-
-      if(
-        losersChampion &&
-        String(winnersChampion) !==
-        String(losersChampion)
-      ){
-
-        const grandFinalExists =
-          current.some(m =>
-            m.round_name === "Grand Final"
-          );
-
-        if(!grandFinalExists){
-
-          await insertScheduledMatch(
-            tournamentId,
-            "Grand Final",
-            winnersChampion,
-            losersChampion,
-            1,
-            15,
-            "Chung kết"
-          );
-
-        }
-
-      }
-
-    }
-
   }
 
   /* Nếu Grand Final hoàn thành -> kết thúc giải. */
-  const grandFinal =
-    getTournamentMatches(tournamentId)
-      .find(m =>
-        m.round_name === "Grand Final"
-      );
-
+  const grandFinal = all().find(m => m.round_name === "Grand Final");
   if(grandFinal && matchCompleted(grandFinal)){
-
-    await markTournamentFinished(
-      tournamentId
-    );
-
+    await markTournamentFinished(tournamentId);
   }
 
+  await renderTournamentPanel();
 }
 
 /* =========================================================
