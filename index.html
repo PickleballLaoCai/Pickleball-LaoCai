@@ -13139,8 +13139,8 @@ function openClubAdminPanel(){
   openAdminPanel("club_admin");
 }
 
-function openAdminPanel(expectedRole){
-  if(!isLoggedIn()){
+async function openAdminPanel(expectedRole){
+  const showLogin = () => {
     const isClubLogin = expectedRole === "club_admin";
     openModal(isClubLogin ? "👑 Đăng nhập Chủ tịch CLB" : "🔐 Đăng nhập Quản trị cấp cao", `
       <div class="admin-panel">
@@ -13164,15 +13164,22 @@ function openAdminPanel(expectedRole){
         </div>
       </div>
     `);
+  };
+
+  if(!isLoggedIn()){
+    showLogin();
     return;
   }
 
-  // Đã đăng nhập: vẫn phải kiểm tra đúng loại tài khoản trước khi mở panel.
-  // Chủ tịch CLB không được mở khu vực Quản trị cấp cao.
+  // Mỗi nút đăng nhập là một vai trò riêng.
+  // Nếu đang đăng nhập vai trò khác, chuyển sang màn hình đăng nhập
+  // của vai trò được chọn thay vì chặn bằng toast.
   if(expectedRole && currentAdmin?.role !== expectedRole){
-    showToast(expectedRole === "club_admin"
-      ? "Tài khoản hiện tại không phải tài khoản Chủ tịch CLB."
-      : "Chỉ Quản trị cấp cao mới được mở khu vực này.");
+    await supabaseClient.auth.signOut();
+    currentSession = null;
+    currentAdmin = null;
+    updateAdminButton();
+    showLogin();
     return;
   }
 
