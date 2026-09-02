@@ -7000,7 +7000,7 @@ if (
         · Đánh đến ${Number(nextMatch.target_score || 11)} điểm
       </div>
       <div class="row-actions" style="margin-top:8px;">
-        <button class="btn primary" onclick="openMatchResultModal('${nextMatch.id}')">Nhập kết quả trận tiếp theo</button>
+        ${canManageMatch(nextMatch) ? `<button class="btn primary" onclick="openMatchResultModal('${nextMatch.id}')">Nhập kết quả trận tiếp theo</button>` : `<span class="muted">Tài khoản hiện tại chưa được cấp quyền nhập kết quả.</span>`}
       </div>
     </div>
   ` : "";
@@ -7217,7 +7217,8 @@ if (
                   ${
                     !isCompleted &&
                     match.team_a &&
-                    match.team_b
+                    match.team_b &&
+                    canManageMatch(match)
                       ? `
 
                         <div
@@ -7448,7 +7449,8 @@ if (
           ${
             !completed &&
             match.team_a &&
-            match.team_b
+            match.team_b &&
+            canManageMatch(match)
               ? `
                 <div class="row-actions">
 
@@ -10236,6 +10238,7 @@ async function generateGroupMatches(
 ){
 
   const tournament = tournamentById(tournamentId);
+  if(!tournament || !canManageTournament(tournament)){ showToast("Bạn không có quyền tạo lịch vòng bảng cho giải này."); return; }
 
   if(!tournament) return;
 
@@ -10380,6 +10383,7 @@ async function generateEliminationMatches(
   const tournament = tournamentById(tournamentId);
 
   if(!tournament) return;
+  if(!canManageTournament(tournament)){ showToast("Bạn không có quyền tạo lịch loại trực tiếp cho giải này."); return; }
 
   const teams = buildTeams(tournamentId);
 
@@ -13099,6 +13103,7 @@ async function loadCurrentAdmin(){
         role: roleData,
         club_name: clubData || null,
         permissions: roleData === "super_admin" ? Object.keys(ADMIN_PERMISSION_LABELS).reduce((o,k)=>(o[k]=true,o),{}) : normalizeAdminPermissions(permissionData),
+        is_active: true,
         created_at: null
       };
       return;
@@ -13114,7 +13119,7 @@ async function loadCurrentAdmin(){
   // Fallback cho trường hợp RPC chưa được cache/không khả dụng.
   const { data, error } = await supabaseClient
     .from("admin_users")
-    .select("user_id, role, club_name, permissions, created_at")
+    .select("user_id, role, club_name, permissions, is_active, created_at")
     .eq("user_id", currentSession.user.id)
     .maybeSingle();
 
@@ -13124,6 +13129,7 @@ async function loadCurrentAdmin(){
   }
   if(data){
     currentAdmin = { ...data, permissions: data.role === "super_admin" ? Object.keys(ADMIN_PERMISSION_LABELS).reduce((o,k)=>(o[k]=true,o),{}) : normalizeAdminPermissions(data.permissions) };
+    if(data.is_active === false){ currentAdmin = null; }
   } else {
     currentAdmin = null;
   }
@@ -13276,6 +13282,19 @@ async function saveAdminPermissions(userId){
   await renderAdminPanel();
 }
 
+async function setClubAdminActive(userId, active){
+  if(!isSuperAdmin()){ showToast("Chỉ Quản trị cấp cao mới được thu hồi/cấp lại quyền."); return; }
+  const action = active ? "cấp lại quyền" : "thu hồi toàn bộ quyền";
+  if(!confirm(`Bạn có chắc muốn ${action} cho tài khoản này?`)) return;
+  const {error}=await supabaseClient.rpc("admin_set_active",{
+    p_target_user_id:userId,
+    p_active:!!active
+  });
+  if(error){ console.error("SET ADMIN ACTIVE:",error); showToast("Không thể cập nhật trạng thái: "+error.message); return; }
+  showToast(active ? "Đã cấp lại quyền quản trị cho Chủ tịch CLB." : "Đã thu hồi toàn bộ quyền quản trị của Chủ tịch CLB.");
+  await renderAdminPanel();
+}
+
 function openManualRatingModal(memberId, suggestedRating=null, assessmentId=null){
   if(!isSuperAdmin()){ showToast("Chỉ Hội đồng chấm trình mới được chốt điểm chính thức."); return; }
   const member=memberById(memberId);
@@ -13357,7 +13376,7 @@ async function renderAdminPanel(){
   if(isSuperAdmin()) {
     const { data: adminRows, error: adminRowsError } = await supabaseClient
       .from("admin_users")
-      .select("user_id, role, club_name, permissions, created_at")
+      .select("user_id, role, club_name, permissions, is_active, created_at")
       .order("created_at", { ascending:false });
     if(adminRowsError){
       console.warn("Không tải được danh sách quản trị:", adminRowsError);
@@ -13446,11 +13465,12 @@ async function renderAdminPanel(){
         <h4 style="margin-top:18px">🔐 Phân quyền riêng từng Chủ tịch CLB</h4>
         <div class="notice">Mỗi tài khoản có thể được cấp <b>5/5, 4/5, 3/5...</b> quyền độc lập. Quản trị cấp cao luôn có toàn quyền.</div>
         <div class="table-wrap">
-          <table class="admin-table"><thead><tr><th>Tài khoản</th><th>CLB</th><th>Bộ quyền</th><th>Lưu</th></tr></thead><tbody>
+          <table class="admin-table"><thead><tr><th>Tài khoản</th><th>CLB</th><th>Trạng thái</th><th>Bộ quyền</th><th>Thao tác</th></tr></thead><tbody>
           ${adminUsers.filter(u=>u.role === "club_admin").map(u=>{
             const perms=normalizeAdminPermissions(u.permissions);
-            return `<tr><td><code>${escapeHtml(u.user_id||"")}</code></td><td>${escapeHtml(u.club_name||"Chưa gán CLB")}</td><td><div style="display:grid;gap:5px">${Object.entries(ADMIN_PERMISSION_LABELS).map(([key,label])=>`<label style="font-weight:400"><input id="perm_${key}_${u.user_id}" type="checkbox" ${perms[key]?'checked':''}> ${label}</label>`).join("")}</div></td><td><button class="btn btn-primary" style="padding:6px 9px" onclick="saveAdminPermissions('${u.user_id}')">💾 Lưu quyền</button></td></tr>`;
-          }).join("") || `<tr><td colspan="4">Chưa có tài khoản Chủ tịch CLB.</td></tr>`}
+            const active=u.is_active !== false;
+            return `<tr><td><code>${escapeHtml(u.user_id||"")}</code></td><td>${escapeHtml(u.club_name||"Chưa gán CLB")}</td><td><span class="badge ${active?'badge-green':'badge-yellow'}">${active?'Đang hoạt động':'Đã thu hồi'}</span></td><td><div style="display:grid;gap:5px">${Object.entries(ADMIN_PERMISSION_LABELS).map(([key,label])=>`<label style="font-weight:400;opacity:${active?1:.55}"><input id="perm_${key}_${u.user_id}" type="checkbox" ${perms[key]?'checked':''} ${active?'':'disabled'}> ${label}</label>`).join("")}</div></td><td><div style="display:grid;gap:6px"><button class="btn btn-primary" style="padding:6px 9px" onclick="saveAdminPermissions('${u.user_id}')">💾 Lưu quyền</button>${active?`<button class="btn btn-danger" style="padding:6px 9px" onclick="setClubAdminActive('${u.user_id}',false)">🔒 Thu hồi quyền</button>`:`<button class="btn btn-secondary" style="padding:6px 9px" onclick="setClubAdminActive('${u.user_id}',true)">🔓 Cấp lại quyền</button>`}</div></td></tr>`;
+          }).join("") || `<tr><td colspan="5">Chưa có tài khoản Chủ tịch CLB.</td></tr>`}
           </tbody></table>
         </div>
         <h4 style="margin-top:18px">🎯 Điều chỉnh trình chính thức</h4>
