@@ -6030,11 +6030,11 @@ document
 
             name,
 
-          date:
+          event_date:
 
             tournamentDate,
 
-          place:
+          location:
 
             place || null,
 
@@ -6195,7 +6195,7 @@ async function loadAllRegistrations(){
       .from("tournament_registrations")
       .select("*")
       .order(
-        "created_at",
+        "id",
         {
           ascending:true
         }
@@ -7582,15 +7582,15 @@ if (
             <div class="muted">
 
               ${formatDate(
-                tournament.date
+                tournament.event_date
               )}
 
               ${
-                tournament.place
+                tournament.location
                   ? `
                     ·
                     ${escapeHtml(
-                      tournament.place
+                      tournament.location
                     )}
                   `
                   : ""
@@ -10704,7 +10704,7 @@ async function loadTournaments() {
   const { data, error } = await supabaseClient
     .from("tournaments")
     .select("*")
-    .order("date", { ascending: false });
+    .order("event_date", { ascending: false });
 
   if (error) {
     console.error("loadTournaments:", error);
@@ -10781,8 +10781,8 @@ function renderTournaments() {
             </div>
 
             <div class="muted">
-              ${formatDate(t.date)}
-              ${t.place ? " · " + escapeHtml(t.place) : ""}
+              ${formatDate(t.event_date)}
+              ${t.location ? " · " + escapeHtml(t.location) : ""}
             </div>
           </div>
 
@@ -12875,11 +12875,11 @@ function openTournamentDetail(tournamentId) {
         </h3>
 
         <div class="muted">
-          ${formatDate(tournament.date)}
+          ${formatDate(tournament.event_date)}
           ${
-            tournament.place
+            tournament.location
               ? " · " +
-                escapeHtml(tournament.place)
+                escapeHtml(tournament.location)
               : ""
           }
         </div>
@@ -13399,7 +13399,7 @@ async function renderAdminPanel(){
     const canDelete = isSuperAdmin();
     return `
       <tr>
-        <td><b>${escapeHtml(t.name || "")}</b><br><span class="muted">${formatDate(t.date)}</span></td>
+        <td><b>${escapeHtml(t.name || "")}</b><br><span class="muted">${formatDate(t.event_date)}</span></td>
         <td>${escapeHtml(t.created_club || (t.created_by ? "Đã ghi nhận" : "Giải cũ"))}</td>
         <td><b>${teamCount}</b> đội<br><span class="muted">${participantCount} người</span></td>
         <td><b>${paidRegistrationsForTournament(t.id).length}</b></td>
