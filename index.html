@@ -1554,6 +1554,132 @@ th{
 .admin-table th,.admin-table td{padding:9px;border-bottom:1px solid #f0dce7;text-align:left;font-size:13px;vertical-align:top}
 .admin-table th{background:#fff4f9;color:var(--pink-dark)}
 
+
+/* =========================================================
+   DIRECT ELIMINATION BRACKET — visual tree
+========================================================= */
+.direct-bracket-shell{
+  border:1px solid #e7c8d9;
+  border-radius:16px;
+  background:#fff;
+  overflow:hidden;
+}
+.direct-bracket-title{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  padding:14px 16px;
+  border-bottom:1px solid #ead8e1;
+}
+.direct-bracket-scroll{
+  overflow-x:auto;
+  overflow-y:hidden;
+  padding:18px;
+}
+.direct-bracket{
+  display:flex;
+  align-items:flex-start;
+  gap:58px;
+  min-width:max-content;
+  padding:6px 4px 16px;
+}
+.direct-bracket-column{
+  width:250px;
+  flex:0 0 250px;
+}
+.direct-bracket-column-title{
+  text-align:center;
+  font-weight:800;
+  margin-bottom:14px;
+  padding:9px 10px;
+  border-radius:10px;
+  background:#f4e8ef;
+  color:#214c3c;
+}
+.direct-bracket-column-matches{
+  display:flex;
+  flex-direction:column;
+  gap:34px;
+}
+.direct-bracket-match{
+  position:relative;
+  background:#fff;
+  border:1px solid #d9c5cf;
+  border-radius:10px;
+  box-shadow:0 4px 12px rgba(80,30,60,.07);
+  overflow:visible;
+}
+.direct-bracket-match::after{
+  content:"";
+  position:absolute;
+  right:-43px;
+  top:50%;
+  width:42px;
+  border-top:2px solid #d5a0ba;
+}
+.direct-bracket-column:last-child .direct-bracket-match::after{
+  display:none;
+}
+.direct-bracket-match-head{
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  padding:7px 10px;
+  font-size:12px;
+  color:#6b6570;
+  background:#faf6f8;
+  border-bottom:1px solid #eadde4;
+  border-radius:10px 10px 0 0;
+}
+.direct-bracket-status{
+  font-weight:700;
+}
+.direct-bracket-team{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  min-height:38px;
+  padding:7px 10px;
+  border-bottom:1px solid #eee;
+}
+.direct-bracket-team:last-of-type{
+  border-bottom:0;
+}
+.direct-bracket-team.winner{
+  background:#eaf8f0;
+}
+.direct-bracket-name{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.direct-bracket-result-btn{
+  width:calc(100% - 20px);
+  margin:8px 10px 10px;
+  padding:7px 9px;
+}
+.direct-bracket-match.is-bye{
+  border-style:dashed;
+}
+.direct-bracket-match.is-bye .direct-bracket-team:last-of-type{
+  color:#777;
+}
+@media (max-width:700px){
+  .direct-bracket-column{
+    width:220px;
+    flex-basis:220px;
+  }
+  .direct-bracket{
+    gap:34px;
+  }
+  .direct-bracket-match::after{
+    right:-35px;
+    width:34px;
+  }
+}
 </style>
 
 </head>
@@ -6822,6 +6948,11 @@ async function renderTournamentPanel() {
 
     registrationHtml = `
 
+      <div class="notice" style="margin-bottom:12px;">
+        <strong>📌 Quy định đăng ký:</strong> tìm thành viên bằng số điện thoại, tự lấy trình hiện tại và tính tổng trình đối với đánh đôi.
+        ${Number.isFinite(Number(tournament.rating_limit)) ? `<br><span style="color:#c00;font-weight:800;">🔴 Vượt giới hạn trình vẫn được đăng ký, nhưng sẽ được cảnh báo để Ban tổ chức xem xét.</span>` : ""}
+      </div>
+
       <div class="table-wrap">
 
         <table>
@@ -6871,33 +7002,23 @@ async function renderTournamentPanel() {
 
 
                   let ratingText = "—";
+                  let ratingWarning = "";
 
-if (
-  member1 &&
-  member2
-) {
-
-  const r1 =
-    Number(member1.rating || 1);
-
-  const r2 =
-    Number(member2.rating || 1);
-
-  /* ĐÁNH ĐÔI: TỔNG TRÌNH */
-  ratingText =
-    formatRating(
-      r1 + r2
-    );
-
-} else if (member1) {
-
-  /* ĐÁNH ĐƠN */
-  ratingText =
-    formatRating(
-      member1.rating
-    );
-
-}
+                  if (member1 && member2) {
+                    const r1 = Number(member1.rating || 1);
+                    const r2 = Number(member2.rating || 1);
+                    const total = r1 + r2;
+                    ratingText = formatRating(total);
+                    if(Number.isFinite(Number(tournament.rating_limit)) && total > Number(tournament.rating_limit)){
+                      ratingWarning = `<div style="color:#d00;font-weight:800;margin-top:5px;">🔴 Vượt điểm trình tối đa của giải – cần xem xét</div>`;
+                    }
+                  } else if (member1) {
+                    const total = Number(member1.rating || 1);
+                    ratingText = formatRating(total);
+                    if(Number.isFinite(Number(tournament.rating_limit)) && total > Number(tournament.rating_limit)){
+                      ratingWarning = `<div style="color:#d00;font-weight:800;margin-top:5px;">🔴 Vượt điểm trình tối đa của giải – cần xem xét</div>`;
+                    }
+                  }
 
                   return `
 
@@ -6915,6 +7036,8 @@ if (
                             getTeamDisplayName(reg)
                           )}
                         </strong>
+                        ${member1 ? `<div class="muted">📞 ${escapeHtml(member1.phone || "")} ${member1.club ? " · " + escapeHtml(member1.club) : ""}</div>` : ""}
+                        ${member2 ? `<div class="muted">📞 ${escapeHtml(member2.phone || "")} ${member2.club ? " · " + escapeHtml(member2.club) : ""}</div>` : ""}
 
 
                         ${
@@ -6940,13 +7063,15 @@ if (
 
 
                       <td>
-                        ${ratingText}
+                        <strong>${ratingText}</strong>
+                        ${ratingWarning}
                       </td>
 
 
                       <td>
-                        ${paymentStatusBadge(reg.payment_status)}
-                        <div class="muted" style="margin-top:5px;">${escapeHtml(reg.status || "registered")}</div>
+                        <div><strong>Đăng ký:</strong> ${escapeHtml(reg.status || "registered")}</div>
+                        ${reg.created_at || reg.registered_at ? `<div class="muted">🕒 ${formatDate(reg.created_at || reg.registered_at)}</div>` : ""}
+                        <div style="margin-top:5px;">${paymentStatusBadge(reg.payment_status)}</div>
                         <div class="row-actions" style="margin-top:6px;">
                           <button class="btn" style="padding:5px 8px;" onclick="openPaymentModal('${reg.id}')">💳 Đã nộp phí</button>
                           ${isAdmin() && reg.payment_proof_path ? `<button class="btn" style="padding:5px 8px;" onclick="viewPaymentProof('${reg.id}')">📎 Xem ảnh</button>` : ""}
@@ -7309,142 +7434,149 @@ if (
 
 
   /* =====================================================
-     BRACKET LOẠI TRỰC TIẾP
+     BRACKET LOẠI TRỰC TIẾP — SƠ ĐỒ
+     - Hiển thị dạng cột giống bracket trực quan.
+     - Không lộ nhãn "Nhánh thắng / Nhánh thua".
+     - Trận đã có kết quả vẫn giữ nguyên trên sơ đồ.
+     - Chỉ ẩn thông tin nội bộ của round_name, không xoá dữ liệu.
   ===================================================== */
 
   let bracketHtml = "";
 
+  if (tournament.format === "double_elimination") {
 
-  if (
-    tournament.format ===
-    "double_elimination"
-  ) {
+    const directMatches = tournamentMatches
+      .filter(m => m.team_a || m.team_b)
+      .sort((a,b) => {
+        const roundA = String(a.round_name || "");
+        const roundB = String(b.round_name || "");
 
-    const winners =
-      tournamentMatches.filter(m => {
+        const getRoundNo = name => {
+          const match = name.match(/Vòng\s+(\d+)/i);
+          return match ? Number(match[1]) : 999;
+        };
 
-        const name =
-          String(
-            m.round_name || ""
-          ).toLowerCase();
+        const isGrand = name => /grand\s*final|chung\s*kết/i.test(name);
+        const isPlayoff = name => /playoff/i.test(name);
 
-        return (
-          name.includes("winner") ||
-          name.includes("wb")
-        );
+        const key = name => {
+          if (isGrand(name)) return 1000;
+          if (isPlayoff(name)) return 2;
+          const n = getRoundNo(name);
+          return n === 999 ? 500 : n;
+        };
 
+        const ka = key(roundA);
+        const kb = key(roundB);
+
+        if (ka !== kb) return ka - kb;
+        return Number(a.match_no || 0) - Number(b.match_no || 0);
       });
 
+    function directRoundLabel(roundName) {
+      const name = String(roundName || "");
 
-    const losers =
-      tournamentMatches.filter(m => {
+      if (/grand\s*final/i.test(name)) return "Chung kết";
+      if (/playoff/i.test(name)) return "Playoff";
 
-        const name =
-          String(
-            m.round_name || ""
-          ).toLowerCase();
+      const m = name.match(/Vòng\s+(\d+)/i);
+      if (m) {
+        const n = Number(m[1]);
+        return n === 1 ? "Vòng 1" : "Vòng " + n;
+      }
 
-        return (
-          name.includes("loser") ||
-          name.includes("lb")
-        );
+      if (/chung\s*kết/i.test(name)) return "Chung kết";
+      if (/bán\s*kết/i.test(name)) return "Bán kết";
+      if (/tứ\s*kết/i.test(name)) return "Tứ kết";
 
-      });
+      return "Vòng đấu";
+    }
 
+    function directRoundKey(roundName) {
+      const name = String(roundName || "");
 
-    const grandFinal =
-      tournamentMatches.filter(m =>
-        String(
-          m.round_name || ""
-        )
-          .toLowerCase()
-          .includes("grand final")
-      );
+      if (/grand\s*final|chung\s*kết/i.test(name)) return "1000-final";
+      if (/playoff/i.test(name)) return "002-playoff";
 
+      const m = name.match(/Vòng\s+(\d+)/i);
+      if (m) return String(Number(m[1])).padStart(3,"0");
 
-    function bracketMatchHtml(match) {
+      if (/bán\s*kết/i.test(name)) return "998-semifinal";
+      if (/tứ\s*kết/i.test(name)) return "997-quarterfinal";
 
-      const sideA =
-        getMatchSideName(
-          match.team_a
-        );
+      return "500-other";
+    }
 
+    const roundMap = new Map();
 
-      const sideB =
-        getMatchSideName(
-          match.team_b
-        );
+    directMatches.forEach(match => {
+      const key = directRoundKey(match.round_name);
+      if (!roundMap.has(key)) {
+        roundMap.set(key, {
+          label: directRoundLabel(match.round_name),
+          matches: []
+        });
+      }
+      roundMap.get(key).matches.push(match);
+    });
 
+    function directBracketMatchHtml(match) {
+      const sideA = getMatchSideName(match.team_a);
+      const sideB = match.team_b
+        ? getMatchSideName(match.team_b)
+        : "BYE";
 
       const completed =
         match.status === "completed" ||
         match.status === "finished";
 
+      const isBye =
+        !match.team_b ||
+        String(match.notes || "").toLowerCase().includes("bye");
+
+      const scoreA =
+        match.score_a !== null && match.score_a !== undefined
+          ? match.score_a
+          : "—";
+
+      const scoreB =
+        match.score_b !== null && match.score_b !== undefined
+          ? match.score_b
+          : (isBye ? "0" : "—");
+
+      const winnerA =
+        completed &&
+        Number(match.score_a) > Number(match.score_b);
+
+      const winnerB =
+        completed &&
+        Number(match.score_b) > Number(match.score_a);
 
       return `
+        <div class="direct-bracket-match ${completed ? "is-completed" : ""} ${isBye ? "is-bye" : ""}">
 
-        <div class="match-card">
-
-          <div class="match-top">
-
-            <strong>
-              ${escapeHtml(
-                match.round_name ||
-                "Vòng đấu"
-              )}
-            </strong>
-
-            <span class="badge">
-              ${
-                completed
-                  ? "Đã đấu"
-                  : "Chưa đấu"
-              }
+          <div class="direct-bracket-match-head">
+            <span>
+              Trận ${escapeHtml(String(match.match_no || ""))}
             </span>
-
+            <span class="direct-bracket-status">
+              ${isBye ? "BYE" : (completed ? "Đã đấu" : "Chưa đấu")}
+            </span>
           </div>
 
-
-          <div class="match-body">
-
-            <div class="team">
-
-              <div class="team-name">
-                ${escapeHtml(sideA)}
-              </div>
-
-              <div class="score">
-                ${
-                  match.score_a ??
-                  "—"
-                }
-              </div>
-
-            </div>
-
-
-            <div class="vs">
-              VS
-            </div>
-
-
-            <div class="team">
-
-              <div class="team-name">
-                ${escapeHtml(sideB)}
-              </div>
-
-              <div class="score">
-                ${
-                  match.score_b ??
-                  "—"
-                }
-              </div>
-
-            </div>
-
+          <div class="direct-bracket-team ${winnerA ? "winner" : ""}">
+            <span class="direct-bracket-name">
+              ${escapeHtml(sideA)}
+            </span>
+            <strong>${escapeHtml(String(scoreA))}</strong>
           </div>
 
+          <div class="direct-bracket-team ${winnerB ? "winner" : ""}">
+            <span class="direct-bracket-name">
+              ${escapeHtml(sideB)}
+            </span>
+            <strong>${escapeHtml(String(scoreB))}</strong>
+          </div>
 
           ${
             !completed &&
@@ -7452,108 +7584,59 @@ if (
             match.team_b &&
             canManageMatch(match)
               ? `
-                <div class="row-actions">
-
-                  <button
-                    class="btn primary"
-                    onclick="openMatchResultModal('${match.id}')">
-
-                    Nhập kết quả
-
-                  </button>
-
-                </div>
+                <button
+                  class="btn primary direct-bracket-result-btn"
+                  onclick="openMatchResultModal('${match.id}')">
+                  Nhập kết quả
+                </button>
               `
               : ""
           }
 
         </div>
-
       `;
-
     }
 
-
     bracketHtml = `
+      <div class="direct-bracket-shell">
 
-      <div class="bracket-grid">
-
-        <div>
-
-          <h3>
-            🏆 Winners Bracket
-          </h3>
-
-
-          ${
-            winners.length
-              ? winners
-                  .map(
-                    bracketMatchHtml
-                  )
-                  .join("")
-              : `
-                <div class="empty">
-                  Chưa có trận nhánh thắng.
-                </div>
-              `
-          }
-
+        <div class="direct-bracket-title">
+          <div>
+            <strong>🏆 Sơ đồ loại trực tiếp</strong>
+            <div class="muted">
+              Trận đã đấu vẫn được giữ trên sơ đồ; đội thắng tự động đi tiếp.
+            </div>
+          </div>
+          <span class="chip">
+            ${directMatches.length} trận
+          </span>
         </div>
 
+        <div class="direct-bracket-scroll">
+          <div class="direct-bracket">
+            ${
+              [...roundMap.entries()]
+                .sort(([a],[b]) => a.localeCompare(b))
+                .map(([key, round]) => `
+                  <div class="direct-bracket-column">
+                    <div class="direct-bracket-column-title">
+                      ${escapeHtml(round.label)}
+                    </div>
 
-        <div>
-
-          <h3>
-            🔥 Losers Bracket
-          </h3>
-
-
-          ${
-            losers.length
-              ? losers
-                  .map(
-                    bracketMatchHtml
-                  )
-                  .join("")
-              : `
-                <div class="empty">
-                  Chưa có trận nhánh thua.
-                </div>
-              `
-          }
-
-        </div>
-
-      </div>
-
-
-      <div style="margin-top:18px;">
-
-        <h3>
-          🏆 Grand Final
-        </h3>
-
-
-        ${
-          grandFinal.length
-            ? grandFinal
-                .map(
-                  bracketMatchHtml
-                )
+                    <div class="direct-bracket-column-matches">
+                      ${round.matches.map(directBracketMatchHtml).join("")}
+                    </div>
+                  </div>
+                `)
                 .join("")
-            : `
-              <div class="empty">
-                Grand Final chưa được tạo.
-              </div>
-            `
-        }
+            }
+          </div>
+        </div>
 
       </div>
-
     `;
-
   }
+
 
 
   /* =====================================================
@@ -8754,6 +8837,22 @@ async function submitRegistration(tournamentId) {
   }
 
 
+  // Vượt giới hạn trình chỉ là cảnh báo, KHÔNG chặn đăng ký.
+  const r1 = Number(member1.rating || 1);
+  const r2 = member2 ? Number(member2.rating || 1) : 0;
+  const totalRating = tournament.competition_type === "doubles" ? r1 + r2 : r1;
+  const ratingLimit = Number(tournament.rating_limit);
+  if(Number.isFinite(ratingLimit) && totalRating > ratingLimit){
+    const proceed = confirm(
+      "⚠️ Vượt điểm trình tối đa của giải\n\n" +
+      "Tổng trình: " + formatRating(totalRating) + "\n" +
+      "Giới hạn: " + formatRating(ratingLimit) + "\n\n" +
+      "Vẫn đăng ký để Ban tổ chức xem xét?"
+    );
+    if(!proceed) return;
+  }
+
+
   /*
    * Tải lại danh sách đăng ký mới nhất
    */
@@ -9490,10 +9589,10 @@ function buildDoubleEliminationPreview(
 
 /* =========================================================
    QUY TẮC TỰ ĐỘNG CHỌN SỐ BẢNG
-   1-8: tối đa 2 bảng
-   9-11: 3 bảng
-   12: 4 bảng
-   13-16: 4 bảng
+   1-5: 1 bảng
+   6-9: 2 bảng
+   10-11: 3 bảng
+   12-16: 4 bảng
 ========================================================= */
 
 function getGroupCountForTeams(teamCount){
@@ -9501,65 +9600,41 @@ function getGroupCountForTeams(teamCount){
   const n = Number(teamCount) || 0;
 
   if(n <= 0) return 0;
-  if(n <= 4) return 1;
-  if(n <= 8) return 2;
+
+  // 1-5: một bảng duy nhất, đấu vòng tròn.
+  if(n <= 5) return 1;
+
+  // 6-9: hai bảng, lấy Nhất + Nhì vào bán kết.
+  if(n <= 9) return 2;
+
+  // 10-11: ba bảng, lấy 6 đội Nhất/Nhì + 2 đội hạng Ba tốt nhất.
   if(n <= 11) return 3;
+
+  // 12-16: bốn bảng, lấy Nhất + Nhì vào tứ kết.
   return 4;
 
 }
 
 
-function getKnockoutQualifiers(teams, tournamentId){
+function getHeadToHeadOutcome(tournamentId, aId, bId){
 
-  const count = teams.length;
+  const relevant = matches.filter(m =>
+    String(m.tournament_id) === String(tournamentId) &&
+    matchCompleted(m) &&
+    ((String(m.team_a) === String(aId) && String(m.team_b) === String(bId)) ||
+     (String(m.team_a) === String(bId) && String(m.team_b) === String(aId)))
+  );
 
-  const groupCount = getGroupCountForTeams(count);
+  if(!relevant.length) return 0;
 
-  const groups = createGroups(teams, groupCount);
+  const m = relevant[relevant.length - 1];
+  const sa = Number(m.score_a);
+  const sb = Number(m.score_b);
+  if(!Number.isFinite(sa) || !Number.isFinite(sb) || sa === sb) return 0;
 
-  const standingsByGroup = groups.map(group => {
-
-    const ids = new Set(group.teams.map(t => String(t.id)));
-
-    return calculateStandingsForGroup(
-      tournamentId,
-      ids
-    );
-
-  });
-
-  /* 1-8:
-     1 bảng -> lấy 4 đội;
-     2 bảng -> lấy nhất + nhì mỗi bảng. */
-  if(count <= 8){
-
-    if(groupCount === 1){
-      return standingsByGroup[0].slice(0,4);
-    }
-
-    return standingsByGroup
-      .flatMap(group => group.slice(0,2));
-
-  }
-
-  /* 12-16: 4 bảng -> nhất + nhì mỗi bảng. */
-  if(count >= 12){
-
-    return standingsByGroup
-      .flatMap(group => group.slice(0,2));
-
-  }
-
-  /* 9-11:
-     Yêu cầu hiện tại của chủ giải chỉ xác định:
-     3 bảng và lấy 3 đội có điểm cao nhất tổng thể.
-     3 đội chưa đủ để tạo tứ kết 8 đội, nên hệ thống
-     chỉ trả về 3 đội để hiển thị; không tự bịa thêm 5 đội. */
-  return standingsByGroup
-    .flat()
-    .sort(compareStandingItems)
-    .slice(0,3);
-
+  return String(m.team_a) === String(aId)
+    ? (sa > sb ? 1 : -1)
+    : (sb > sa ? 1 : -1);
 }
 
 
@@ -9571,7 +9646,63 @@ function compareStandingItems(a,b){
   if((b.diff||0) !== (a.diff||0))
     return (b.diff||0) - (a.diff||0);
 
+  // Đối đầu được xét trước số điểm ghi khi hai đội còn bằng nhau.
+  if(a.tournamentId && a.registration_id && b.registration_id){
+    const h2h = getHeadToHeadOutcome(a.tournamentId, a.registration_id, b.registration_id);
+    if(h2h) return -h2h;
+  }
+
   return (b.scoreFor||0) - (a.scoreFor||0);
+
+}
+
+
+function compareThirdPlaceTeams(a,b,tournamentId){
+
+  if((b.points||0) !== (a.points||0)) return (b.points||0) - (a.points||0);
+  if((b.diff||0) !== (a.diff||0)) return (b.diff||0) - (a.diff||0);
+
+  const h2h = getHeadToHeadOutcome(tournamentId, a.registration_id, b.registration_id);
+  if(h2h) return -h2h;
+
+  // Không có đối đầu trực tiếp hoặc mọi tiêu chí đều bằng nhau:
+  // bốc thăm tự động để chọn thứ tự.
+  return Math.random() - 0.5;
+}
+
+
+function getKnockoutQualifiers(teams, tournamentId){
+
+  const count = teams.length;
+  const groupCount = getGroupCountForTeams(count);
+  const groups = createGroups(teams, groupCount);
+
+  const standingsByGroup = groups.map(group => {
+    const ids = new Set(group.teams.map(t => String(t.id)));
+    return calculateStandingsForGroup(tournamentId, ids)
+      .map(row => ({...row, groupName: group.name, tournamentId}));
+  });
+
+  // 1-5: chỉ xếp hạng bảng, không tạo vòng loại trực tiếp.
+  if(count <= 5) return standingsByGroup[0] || [];
+
+  // 6-9: Nhất + Nhì mỗi bảng -> 4 đội -> Bán kết.
+  if(count <= 9){
+    return standingsByGroup.flatMap(group => group.slice(0,2));
+  }
+
+  // 10-11: 6 đội Nhất/Nhì + 2 đội hạng Ba tốt nhất.
+  if(count <= 11){
+    const primary = standingsByGroup.flatMap(group => group.slice(0,2));
+    const thirds = standingsByGroup
+      .map(group => group[2])
+      .filter(Boolean)
+      .sort((a,b) => compareThirdPlaceTeams(a,b,tournamentId));
+    return primary.concat(thirds.slice(0,2));
+  }
+
+  // 12-16: Nhất + Nhì mỗi bảng -> 8 đội -> Tứ kết.
+  return standingsByGroup.flatMap(group => group.slice(0,2));
 
 }
 
@@ -9594,7 +9725,8 @@ function calculateStandingsForGroup(tournamentId, teamIdSet){
       points: 0,
       scoreFor: 0,
       scoreAgainst: 0,
-      diff: 0
+      diff: 0,
+      tournamentId
     };
 
   });
@@ -9673,6 +9805,30 @@ function buildGroupKnockoutPairs(qualifiers){
     [qualifiers[6], qualifiers[3]]
   ];
 
+}
+
+
+function buildFlexibleKnockoutPairs(qualifiers){
+  const items = qualifiers.slice();
+
+  // Ưu tiên không gặp cùng bảng ở tứ kết. Dùng backtracking vì chỉ có 8 đội.
+  function search(remaining, pairs){
+    if(!remaining.length) return pairs;
+    const first = remaining[0];
+    for(let i=1;i<remaining.length;i++){
+      const second = remaining[i];
+      if(first.groupName && second.groupName && first.groupName === second.groupName) continue;
+      const next = remaining.slice(1,i).concat(remaining.slice(i+1));
+      const result = search(next, pairs.concat([[first,second]]));
+      if(result) return result;
+    }
+    return null;
+  }
+
+  return search(items, []) || items.reduce((out, item, index) => {
+    if(index % 2 === 0 && items[index+1]) out.push([item, items[index+1]]);
+    return out;
+  }, []);
 }
 
 function createGroups(
@@ -10396,78 +10552,57 @@ async function generateEliminationMatches(
      từ danh sách đăng ký; vòng sau phải lấy từ BXH. */
   if(tournament.format === "group_stage"){
 
-    const qualifiers = getKnockoutQualifiers(
-      teams,
-      tournamentId
+    const groupCount = getGroupCountForTeams(teams.length);
+
+    // Chỉ cho tạo vòng loại khi TOÀN BỘ trận vòng bảng đã hoàn thành.
+    const groupMatches = matches.filter(m =>
+      String(m.tournament_id) === String(tournamentId) &&
+      String(m.notes || "") === "Vòng bảng"
     );
 
-    if(teams.length >= 9 && teams.length <= 11){
-
-      alert(
-        "Giải " + teams.length + " đội đã chia 3 bảng.\n\n" +
-        "Theo quy tắc đã chốt hiện tại, hệ thống lấy 3 đội có điểm cao nhất tổng thể.\n" +
-        "3 đội chưa đủ 8 đội để tạo tứ kết, nên hệ thống chưa tự bịa thêm 5 đội."
-      );
-
+    if(!groupMatches.length || !groupMatches.every(matchCompleted)){
+      alert("Vòng bảng chưa đấu xong. Hãy hoàn thành tất cả các trận trong bảng trước khi tạo vòng loại.");
       return;
     }
 
-    const groupCount = getGroupCountForTeams(teams.length);
+    // 1-5 đội: đấu vòng tròn trong một bảng, không có vòng loại.
+    if(teams.length <= 5){
+      alert("Giải có từ 5 đội trở xuống: chỉ thi đấu vòng tròn trong 1 bảng và xếp hạng chung cuộc.");
+      return;
+    }
 
-    /*
-      1 bảng: lấy 4 đội -> Tứ kết.
-      2 bảng: lấy Nhất + Nhì mỗi bảng -> Bán kết luôn.
-      4 bảng: lấy 8 đội -> Tứ kết.
-    */
+    const qualifiers = getKnockoutQualifiers(teams, tournamentId);
     let pairs = [];
     let roundName = "Tứ kết";
 
-    if (groupCount === 1) {
-
+    if (groupCount === 2) {
+      // 6-9 đội: Nhất + Nhì hai bảng -> Bán kết.
       if (qualifiers.length !== 4) {
-        alert(
-          "Chưa đủ 4 đội để tạo tứ kết.\n\n" +
-          "Hiện có " + qualifiers.length + " đội đủ điều kiện."
-        );
+        alert("Chưa đủ 4 đội để tạo bán kết. Hiện có " + qualifiers.length + " đội đủ điều kiện.");
         return;
       }
-
-      pairs = [
-        [qualifiers[0], qualifiers[3]],
-        [qualifiers[1], qualifiers[2]]
-      ];
-
-      roundName = "Tứ kết";
-
-    } else if (groupCount === 2) {
-
-      if (qualifiers.length !== 4) {
-        alert(
-          "Chưa đủ 4 đội để tạo bán kết.\n\n" +
-          "Hiện có " + qualifiers.length + " đội đủ điều kiện."
-        );
-        return;
-      }
-
       pairs = [
         [qualifiers[0], qualifiers[3]],
         [qualifiers[2], qualifiers[1]]
       ];
-
       roundName = "Bán kết";
 
-    } else {
-
+    } else if (groupCount === 3) {
+      // 10-11 đội: 6 đội Nhất/Nhì + 2 đội hạng Ba tốt nhất -> Tứ kết.
       if (qualifiers.length !== 8) {
-        alert(
-          "Chưa đủ 8 đội để tạo tứ kết.\n\n" +
-          "Hiện có " + qualifiers.length + " đội đủ điều kiện."
-        );
+        alert("Chưa xác định đủ 8 đội vào tứ kết. Hiện có " + qualifiers.length + " đội đủ điều kiện.");
         return;
       }
+      pairs = buildFlexibleKnockoutPairs(qualifiers);
+      roundName = "Tứ kết";
 
+    } else {
+      // 12-16 đội: 8 đội Nhất/Nhì -> Tứ kết.
+      if (qualifiers.length !== 8) {
+        alert("Chưa đủ 8 đội để tạo tứ kết. Hiện có " + qualifiers.length + " đội đủ điều kiện.");
+        return;
+      }
       pairs = buildGroupKnockoutPairs(qualifiers);
-
     }
 
     const rows = [];
@@ -10691,6 +10826,7 @@ refreshTournamentFormatChoices();
    28. HẾT PHẦN 3/4
  ========================================================= */
   /* =========================================================
+   FINAL SPEC — GIỮ CHỨC NĂNG CŨ, SỬA THEO QUY TẮC CHỐT
    PHẦN 4/4 — HIỂN THỊ GIẢI, KẾT QUẢ, BẢNG XẾP HẠNG,
    NHẬP KẾT QUẢ, CẬP NHẬT RATING, KHỞI ĐỘNG APP
 ========================================================= */
