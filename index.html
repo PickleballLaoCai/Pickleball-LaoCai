@@ -3272,16 +3272,21 @@ function openModal(titleOrHtml, html) {
 }
 
 
-function closeModal(){
+function closeModal() {
 
   const modal =
     document.getElementById("modal");
 
-  if(modal){
-
-    modal.classList.remove("show");
-
+  if (!modal) {
+    return;
   }
+
+  /* Đóng theo cả hai cơ chế CSS */
+  modal.classList.remove("active");
+  modal.classList.remove("show");
+
+  /* Ẩn modal */
+  modal.style.display = "none";
 
 }
 
