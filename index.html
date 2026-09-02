@@ -7902,6 +7902,157 @@ if (
       </div>
 
 
+      <!-- ĐIỀU PHỐI TẠO BẢNG / LỊCH -->
+
+      <div
+        class="card"
+        style="margin-top:18px;">
+
+        <div class="section-title">
+          ⚡ Tạo bảng đấu & lịch thi đấu
+        </div>
+
+        ${
+          tournament.format === "group_stage"
+            ? (
+                tournamentMatches.length === 0
+                  ? `
+                    <div class="empty">
+                      Giải đã có
+                      <strong>${tournamentRegistrations.length}</strong>
+                      người/đội đăng ký.
+                      <div class="muted" style="margin-top:6px;">
+                        Hệ thống sẽ tự chia bảng và tạo lịch vòng bảng.
+                      </div>
+                    </div>
+
+                    <div class="row-actions" style="margin-top:12px;">
+                      <button
+                        class="btn primary"
+                        onclick="generateGroupMatches('${tournament.id}')">
+                        ⚡ Tạo bảng đấu & lịch vòng bảng
+                      </button>
+                    </div>
+                  `
+                  : (
+                      (() => {
+                        const groupCountForAction =
+                          getGroupCountForTeams(tournamentRegistrations.length);
+
+                        const groupMatches =
+                          tournamentMatches.filter(m =>
+                            String(m.tournament_id) === String(tournament.id) &&
+                            m.notes === "Vòng bảng"
+                          );
+
+                        const allGroupFinished =
+                          groupMatches.length > 0 &&
+                          groupMatches.every(m =>
+                            m.status === "completed" ||
+                            m.status === "finished"
+                          );
+
+                        if (allGroupFinished) {
+                          if (groupCountForAction === 2) {
+                            return `
+                              <div class="notice">
+                                Vòng bảng đã hoàn thành.
+                                <br>
+                                <strong>2 bảng → vào thẳng BÁN KẾT.</strong>
+                              </div>
+
+                              <div class="row-actions" style="margin-top:12px;">
+                                <button
+                                  class="btn primary"
+                                  onclick="generateEliminationMatches('${tournament.id}')">
+                                  🏆 Tạo bán kết
+                                </button>
+                              </div>
+                            `;
+                          }
+
+                          if (groupCountForAction === 1) {
+                            return `
+                              <div class="notice">
+                                Vòng bảng đã hoàn thành.
+                                <br>
+                                <strong>1 bảng → vào TỨ KẾT.</strong>
+                              </div>
+
+                              <div class="row-actions" style="margin-top:12px;">
+                                <button
+                                  class="btn primary"
+                                  onclick="generateEliminationMatches('${tournament.id}')">
+                                  🏆 Tạo tứ kết
+                                </button>
+                              </div>
+                            `;
+                          }
+
+                          if (groupCountForAction === 4) {
+                            return `
+                              <div class="notice">
+                                Vòng bảng đã hoàn thành.
+                                <br>
+                                <strong>4 bảng → lấy Nhất + Nhì mỗi bảng vào TỨ KẾT.</strong>
+                              </div>
+
+                              <div class="row-actions" style="margin-top:12px;">
+                                <button
+                                  class="btn primary"
+                                  onclick="generateEliminationMatches('${tournament.id}')">
+                                  🏆 Tạo tứ kết
+                                </button>
+                              </div>
+                            `;
+                          }
+
+                          return `
+                            <div class="notice">
+                              Vòng bảng đã hoàn thành nhưng thể thức
+                              ${groupCountForAction} bảng chưa đủ quy tắc tạo vòng loại trực tiếp.
+                            </div>
+                          `;
+                        }
+
+                        return `
+                          <div class="notice">
+                            Đã có lịch vòng bảng.
+                            <br>
+                            Hoàn thành các trận vòng bảng để hệ thống cho phép tạo vòng loại trực tiếp.
+                          </div>
+                        `;
+                      })()
+                    )
+              )
+            : (
+                tournamentMatches.length === 0
+                  ? `
+                    <div class="empty">
+                      Đã đủ người/đội. Có thể tạo vòng 1 Double Elimination.
+                    </div>
+
+                    <div class="row-actions" style="margin-top:12px;">
+                      <button
+                        class="btn primary"
+                        onclick="generateEliminationMatches('${tournament.id}')">
+                        ⚡ Tạo vòng 1
+                      </button>
+                    </div>
+                  `
+                  : `
+                    <div class="notice">
+                      Lịch Double Elimination đã được tạo.
+                      <br>
+                      Hệ thống sẽ tự mở các vòng tiếp theo sau khi nhập kết quả.
+                    </div>
+                  `
+              )
+        }
+
+      </div>
+
+
       <!-- LỊCH THI ĐẤU -->
 
       <div
@@ -10337,32 +10488,43 @@ async function generateEliminationMatches(
       return;
     }
 
-    if(qualifiers.length !== 8){
-
-      alert(
-        "Chưa đủ 8 đội để tạo tứ kết.\n\n" +
-        "Hiện có " + qualifiers.length + " đội đủ điều kiện."
-      );
-
-      return;
-    }
+    const groupCount = getGroupCountForTeams(teams.length);
 
     /*
       1 bảng: lấy 4 đội -> Tứ kết.
-      2 bảng: lấy Nhất + Nhì mỗi bảng -> Bán kết luôn,
-      KHÔNG đánh tứ kết.
+      2 bảng: lấy Nhất + Nhì mỗi bảng -> Bán kết luôn.
       4 bảng: lấy 8 đội -> Tứ kết.
     */
     let pairs = [];
     let roundName = "Tứ kết";
 
-    if (getGroupCountForTeams(teams.length) === 2) {
+    if (groupCount === 1) {
 
-      /*
-        2 bảng:
-        A1 vs B2
-        B1 vs A2
-      */
+      if (qualifiers.length !== 4) {
+        alert(
+          "Chưa đủ 4 đội để tạo tứ kết.\n\n" +
+          "Hiện có " + qualifiers.length + " đội đủ điều kiện."
+        );
+        return;
+      }
+
+      pairs = [
+        [qualifiers[0], qualifiers[3]],
+        [qualifiers[1], qualifiers[2]]
+      ];
+
+      roundName = "Tứ kết";
+
+    } else if (groupCount === 2) {
+
+      if (qualifiers.length !== 4) {
+        alert(
+          "Chưa đủ 4 đội để tạo bán kết.\n\n" +
+          "Hiện có " + qualifiers.length + " đội đủ điều kiện."
+        );
+        return;
+      }
+
       pairs = [
         [qualifiers[0], qualifiers[3]],
         [qualifiers[2], qualifiers[1]]
@@ -10371,6 +10533,14 @@ async function generateEliminationMatches(
       roundName = "Bán kết";
 
     } else {
+
+      if (qualifiers.length !== 8) {
+        alert(
+          "Chưa đủ 8 đội để tạo tứ kết.\n\n" +
+          "Hiện có " + qualifiers.length + " đội đủ điều kiện."
+        );
+        return;
+      }
 
       pairs = buildGroupKnockoutPairs(qualifiers);
 
