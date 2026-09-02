@@ -6437,13 +6437,21 @@ async function confirmRegistrationPayment(registrationId, method="cash", approve
   if(!reg){ showToast("Không tìm thấy đăng ký."); return; }
   const tournament = tournamentById(reg.tournament_id);
   if(!canManageTournament(tournament)){ showToast("Bạn không có quyền xử lý đăng ký của giải này."); return; }
-  const patch = approved ? { payment_status:"paid_confirmed", payment_method:method, payment_confirmed_by:currentSession.user.id, payment_confirmed_at:new Date().toISOString() } : { payment_status:"rejected", payment_method:method, payment_confirmed_by:currentSession.user.id, payment_confirmed_at:new Date().toISOString() };
-  const { data, error } = await supabaseClient.from("tournament_registrations").update(patch).eq("id", registrationId).select().single();
-  if(error){ showToast("Không thể cập nhật phí: " + error.message); return; }
-  const idx = registrations.findIndex(r => String(r.id) === String(registrationId));
-  if(idx>=0) registrations[idx] = data || {...registrations[idx], ...patch};
-  await renderTournamentPanel();
-  showToast(approved ? "Đã xác nhận nộp phí." : "Đã từ chối chứng từ.");
+  try{
+    const rpcName = approved ? "confirm_registration_payment" : "reject_registration_payment";
+    const params = approved
+      ? { p_registration_id:Number(registrationId), p_method:method, p_note:method === "cash" ? "Xác nhận thu tiền mặt tại CLB" : "Xác nhận chứng từ chuyển khoản" }
+      : { p_registration_id:Number(registrationId), p_note:"Chứng từ chưa hợp lệ / cần kiểm tra lại" };
+    const { data, error } = await supabaseClient.rpc(rpcName, params);
+    if(error) throw error;
+    if(data && data.ok === false) throw new Error(data.message || "Không xử lý được phí.");
+    await refreshApplication();
+    if(currentTournamentId) await renderTournamentPanel();
+    showToast(approved ? "Đã xác nhận nộp phí." : "Đã từ chối chứng từ.");
+  }catch(error){
+    console.error("confirmRegistrationPayment:", error);
+    showToast("Không thể xử lý phí: " + (error.message || "Lỗi không xác định"));
+  }
 }
 
 async function viewPaymentProof(registrationId){
@@ -11945,6 +11953,51 @@ async function createNextMatch(
 
 
 /* =========================================================
+   42A. ĐẢM BẢO VÒNG KẾ TIẾP — CHIA BẢNG
+========================================================= */
+async function ensureGroupStageNextRound(tournament){
+  if(!tournament || tournament.format !== "group_stage") return false;
+
+  const tm = matches.filter(m => String(m.tournament_id) === String(tournament.id));
+  const pickRound = (name, count) => {
+    const source = tm.filter(m => String(m.round_name || "").trim().toLowerCase() === name.toLowerCase() && matchCompleted(m));
+    const picked=[];
+    for(let no=1; no<=count; no++){
+      const candidates=source.filter(m=>Number(m.match_no)===no).sort((a,b)=>Number(b.id||0)-Number(a.id||0));
+      if(candidates[0]) picked.push(candidates[0]);
+    }
+    return picked;
+  };
+  const createRound = async (roundName, winners, note) => {
+    if(winners.length<2) return false;
+    if(tm.some(m=>String(m.round_name||"").trim().toLowerCase()===roundName.toLowerCase())) return false;
+    const rows=[];
+    for(let i=0;i<winners.length;i+=2){
+      if(!winners[i] || !winners[i+1]) continue;
+      rows.push({tournament_id:tournament.id,round_name:roundName,match_no:rows.length+1,team_a:winners[i],team_b:winners[i+1],target_score:15,status:"scheduled",notes:note});
+    }
+    if(!rows.length) return false;
+    const {data,error}=await supabaseClient.from("matches").insert(rows).select("*");
+    if(error) throw error;
+    matches.push(...(data||[]));
+    return true;
+  };
+
+  const semi=pickRound("Bán kết",2);
+  if(semi.length===2){
+    const winners=semi.map(matchWinnerId).filter(Boolean);
+    if(winners.length===2) return await createRound("Chung kết",winners,"Tự động từ Bán kết");
+  }
+
+  const quarter=pickRound("Tứ kết",4);
+  if(quarter.length===4){
+    const winners=quarter.map(matchWinnerId).filter(Boolean);
+    if(winners.length===4) return await createRound("Bán kết",winners,"Tự động từ Tứ kết");
+  }
+  return false;
+}
+
+/* =========================================================
    42. ADVANCE GIẢI ĐẤU
 ========================================================= */
 
@@ -11984,6 +12037,9 @@ async function advanceTournamentAfterMatch(
    * Bảng xếp hạng sẽ được tính từ toàn bộ kết quả.
    */
   if (tournament.format === "group_stage") {
+
+    // Kiểm tra chắc chắn vòng sau trước khi chạy logic tương thích cũ.
+    await ensureGroupStageNextRound(tournament);
 
     // Vòng loại trực tiếp từ vòng bảng: tự động tạo vòng kế tiếp
     // sau khi TẤT CẢ trận của vòng hiện tại đã có kết quả.
@@ -13171,7 +13227,9 @@ async function renderAdminPanel(){
       <tr>
         <td><b>${escapeHtml(t.name || "")}</b><br><span class="muted">${formatDate(t.date)}</span></td>
         <td>${escapeHtml(t.created_club || (t.created_by ? "Đã ghi nhận" : "Giải cũ"))}</td>
-        <td><b>${participantCount}</b> người<br><span class="muted">${teamCount} đội/đăng ký</span><br><span class="muted">💰 ${paidRegistrationsForTournament(t.id).length} đã nộp phí</span></td>
+        <td><b>${teamCount}</b> đội<br><span class="muted">${participantCount} người</span></td>
+        <td><b>${paidRegistrationsForTournament(t.id).length}</b></td>
+        <td><b>${Math.max(0, teamCount - paidRegistrationsForTournament(t.id).length)}</b></td>
         <td>${escapeHtml(t.status || "")}</td>
         <td>
           <button class="btn btn-secondary" style="padding:6px 9px" onclick="openTournamentDetail('${t.id}')">Xem</button>
@@ -13234,8 +13292,8 @@ async function renderAdminPanel(){
       <h4>🏆 Theo dõi giải đấu</h4>
       <div class="table-wrap">
         <table class="admin-table">
-          <thead><tr><th>Giải</th><th>CLB</th><th>Đăng ký</th><th>Trạng thái</th><th>Quản lý</th></tr></thead>
-          <tbody>${rows || `<tr><td colspan="5">Chưa có giải.</td></tr>`}</tbody>
+          <thead><tr><th>Giải</th><th>CLB</th><th>Tổng đăng ký</th><th>Đã nộp</th><th>Chưa nộp</th><th>Trạng thái</th><th>Quản lý</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="7">Chưa có giải.</td></tr>`}</tbody>
         </table>
       </div>
 
@@ -13254,6 +13312,24 @@ async function renderAdminPanel(){
       </div>
     </div>
   `);
+}
+
+async function adminAdvanceTournament(tournamentId){
+  if(!isAdmin()){ showToast("Chỉ quản trị mới được điều phối giải."); return; }
+  const tournament=tournamentById(tournamentId);
+  if(!tournament || !canManageTournament(tournament)){ showToast("Bạn không có quyền điều phối giải này."); return; }
+  try{
+    await loadAllMatches();
+    if(tournament.format === "group_stage") await ensureGroupStageNextRound(tournament);
+    else if(tournament.format === "double_elimination") await advanceDoubleEliminationProgress(tournamentId);
+    await loadAllMatches();
+    if(currentTournamentId) await renderTournamentPanel();
+    renderAdminPanel();
+    showToast("Đã kiểm tra và cập nhật vòng đấu tiếp theo.");
+  }catch(error){
+    console.error("adminAdvanceTournament:",error);
+    showToast("Không thể điều phối vòng sau: " + (error.message || "Lỗi"));
+  }
 }
 
 async function adminDeleteTournament(tournamentId){
