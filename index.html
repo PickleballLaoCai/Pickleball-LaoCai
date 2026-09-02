@@ -7189,7 +7189,7 @@ if (
                               : ""
                           }
 
-                          ${formatDateTime(
+                          ${formatDate(
                             match.scheduled_at
                           )}
                         `
@@ -11061,7 +11061,7 @@ function renderResultMatches() {
 
           ${
             match.scheduled_at
-              ? " · " + formatDateTime(match.scheduled_at)
+              ? " · " + formatDate(match.scheduled_at)
               : ""
           }
         </div>
@@ -13057,7 +13057,7 @@ async function loadRatingFeedback(){
   if(error){ console.warn("Không tải được phản ánh trình:", error); box.innerHTML='<div class="empty">Chưa thể tải phản ánh.</div>'; return; }
   box.innerHTML = data?.length ? data.map(x => {
     const target = memberById(x.target_member_id);
-    return `<div class="notice" style="margin-top:8px"><b>${esc(x.sender_name || "Ẩn danh")}</b> → <b>${esc(target?.full_name || "Thành viên")}</b> <span class="badge">${esc(x.status || "Đã gửi")}</span><div style="margin-top:6px">${esc(x.content || "")}</div>${x.reviewer_response ? `<div style="margin-top:8px"><b>Hội đồng trả lời:</b> ${esc(x.reviewer_response)}</div>` : ""}<div class="small muted" style="margin-top:6px">${formatDateTime(x.created_at)}</div></div>`;
+    return `<div class="notice" style="margin-top:8px"><b>${esc(x.sender_name || "Ẩn danh")}</b> → <b>${esc(target?.full_name || "Thành viên")}</b> <span class="badge">${esc(x.status || "Đã gửi")}</span><div style="margin-top:6px">${esc(x.content || "")}</div>${x.reviewer_response ? `<div style="margin-top:8px"><b>Hội đồng trả lời:</b> ${esc(x.reviewer_response)}</div>` : ""}<div class="small muted" style="margin-top:6px">${formatDate(x.created_at)}</div></div>`;
   }).join("") : '<div class="empty">Chưa có phản ánh / đề nghị.</div>';
 }
 
