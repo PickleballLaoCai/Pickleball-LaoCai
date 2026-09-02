@@ -12583,10 +12583,17 @@ async function processByeMatches(tournamentId){
     const byeMatches =
       getTournamentMatches(tournamentId)
         .filter(m =>
-          m.status === "bye" &&
+          (
+            String(m.status || "").toLowerCase() === "bye" ||
+            (
+              m.team_a &&
+              !m.team_b &&
+              String(m.notes || "").toLowerCase().includes("bye")
+            )
+          ) &&
           m.team_a &&
           !m.team_b &&
-          m.score_a === null
+          !matchCompleted(m)
         );
 
     for(const match of byeMatches){
@@ -12622,6 +12629,9 @@ async function processByeMatches(tournamentId){
       match.score_a = target;
       match.score_b = 0;
       match.status = "completed";
+      match.notes =
+        (match.notes || "") +
+        " — BYE, không tính rating";
 
       changed = true;
 
@@ -12634,6 +12644,8 @@ async function processByeMatches(tournamentId){
     await advanceDoubleEliminationProgress(
       tournamentId
     );
+
+    await loadAllMatches();
 
   }
 
