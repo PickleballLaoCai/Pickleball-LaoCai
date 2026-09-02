@@ -13341,8 +13341,11 @@ async function respondRatingFeedback(id){
   if(!item){ showToast("Không tìm thấy phản ánh."); return; }
   const response=prompt("Nhập nội dung trả lời của Hội đồng chấm trình:",item.reviewer_response||"");
   if(response===null) return;
-  const {error}=await supabaseClient.from("rating_feedback").update({status:"Đã xử lý",reviewer_response:response.trim()||null,reviewed_by:currentSession.user.id,reviewed_at:new Date().toISOString()}).eq("id",id);
-  if(error){ showToast("Không thể lưu trả lời: " + error.message); return; }
+  const {error}=await supabaseClient.rpc("admin_respond_rating_feedback",{
+    p_feedback_id:Number(id),
+    p_response:response.trim()||null
+  });
+  if(error){ console.error("ADMIN RESPOND FEEDBACK:",error); showToast("Không thể lưu trả lời: " + error.message); return; }
   await refreshApplication(); renderAdminPanel(); showToast("Đã gửi phản hồi của Hội đồng chấm trình.");
 }
 
@@ -13365,10 +13368,7 @@ async function renderAdminPanel(){
   window.__pendingAssessments = assessments || [];
 
   const { data: feedbackRows, error: feedbackError } = await supabaseClient
-    .from("rating_feedback")
-    .select("*")
-    .in("status", ["Đã gửi","Hội đồng tiếp nhận","Đang xem xét"])
-    .order("created_at", { ascending:false });
+    .rpc("get_rating_feedback_admin", { limit_count: 100 });
   if(feedbackError) console.warn("Không tải được phản ánh trình:", feedbackError);
   window.__pendingRatingFeedback = feedbackRows || [];
 
