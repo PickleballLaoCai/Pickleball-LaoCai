@@ -2253,9 +2253,9 @@ th{
 
 
       <div class="field">
-        <label>Tổng điểm tự chấm (nhập tay) *</label>
-        <input id="totalSelfScore" type="number" min="1" max="10" step="0.01" value="5" required>
-        <div id="totalScoreCheck" class="notice" style="margin-top:8px">Tổng hệ thống tính: <b>5,00</b>. Hai số liệu đang khớp.</div>
+        <label>Điểm trình tự đề xuất (nhập tay) *</label>
+        <input id="manualProposedRating" type="number" min="1" max="5" step="0.01" value="2.78" required>
+        <div id="totalScoreCheck" class="notice" style="margin-top:8px">Hệ thống quy đổi từ 4 tiêu chí: <b>2,78</b>. Bạn có thể đề xuất mức trình khác để Hội đồng xem xét.</div>
       </div>
 
       <div class="rating-big">
@@ -4726,24 +4726,33 @@ function calculateWeightedSelfScore(){
   return technical * RATING_CONFIG.technicalWeight + tactical * RATING_CONFIG.tacticalWeight + experience * RATING_CONFIG.experienceWeight + competition * RATING_CONFIG.competitionWeight;
 }
 
+function calculateManualComparisonRating(){
+  const weighted = calculateWeightedSelfScore();
+  return Math.max(
+    RATING_CONFIG.min,
+    RATING_CONFIG.min + ((weighted - 1) / 9) * (RATING_CONFIG.initialMax - RATING_CONFIG.min)
+  );
+}
+
 function updateTotalScoreCheck(){
-  const input = document.getElementById("totalSelfScore");
+  const input = document.getElementById("manualProposedRating");
   const box = document.getElementById("totalScoreCheck");
   if(!input || !box) return;
-  const calculated = calculateWeightedSelfScore();
-  const entered = numberValue(input.value, calculated);
-  const diff = Math.abs(entered - calculated);
+
+  const calculatedRating = calculateManualComparisonRating();
+  const entered = numberValue(input.value, calculatedRating);
+  const diff = Math.abs(entered - calculatedRating);
+
   if(diff > 0.05){
-    box.innerHTML = `⚠️ <b>Chênh ${diff.toFixed(2).replace(".",",")} điểm.</b> Hệ thống tính <b>${calculated.toFixed(2).replace(".",",")}</b>, bạn nhập <b>${entered.toFixed(2).replace(".",",")}</b>. Vẫn có thể gửi để Hội đồng xem xét.`;
+    box.innerHTML = `⚠️ <b>Chênh ${diff.toFixed(2).replace(".",",")} điểm trình.</b> Hệ thống quy đổi là <b>${formatRating(calculatedRating)}</b>, bạn đề xuất <b>${formatRating(entered)}</b>. Vẫn có thể gửi để Hội đồng chấm trình xem xét.`;
     box.style.borderColor = "#f0b429";
   }else{
-    box.innerHTML = `Tổng hệ thống tính: <b>${calculated.toFixed(2).replace(".",",")}</b>. Hai số liệu đang khớp.`;
+    box.innerHTML = `Hệ thống quy đổi từ 4 tiêu chí: <b>${formatRating(calculatedRating)}</b>. Bạn có thể đề xuất mức trình khác để Hội đồng xem xét.`;
     box.style.borderColor = "";
   }
 }
-["technical","tactical","experience","competition","totalSelfScore"].forEach(id => document.getElementById(id)?.addEventListener("input", updateTotalScoreCheck));
+["technical","tactical","experience","competition","manualProposedRating"].forEach(id => document.getElementById(id)?.addEventListener("input", updateTotalScoreCheck));
 updateTotalScoreCheck();
-
 
 /* =========================================================
    20. LƯU TỰ CHẤM TRÌNH
@@ -4837,39 +4846,27 @@ document
           );
 
 
-        const proposedRating =
-          calculateInitialRating();
+        const calculatedTotalScore =
+            technical * RATING_CONFIG.technicalWeight
+          + tactical * RATING_CONFIG.tacticalWeight
+          + experience * RATING_CONFIG.experienceWeight
+          + competition * RATING_CONFIG.competitionWeight;
 
-
-        const totalScore =
-
-            technical
-            * RATING_CONFIG.technicalWeight
-
-          + tactical
-            * RATING_CONFIG.tacticalWeight
-
-          + experience
-            * RATING_CONFIG.experienceWeight
-
-          + competition
-            * RATING_CONFIG.competitionWeight;
-
-
-        const enteredTotal = numberValue(
-          document.getElementById("totalSelfScore")?.value,
-          totalScore
+        const calculatedProposedRating = calculateInitialRating();
+        const proposedRating = numberValue(
+          document.getElementById("manualProposedRating")?.value,
+          calculatedProposedRating
         );
 
-        if(enteredTotal < 1 || enteredTotal > 10){
-          throw new Error("Tổng điểm tự chấm phải từ 1 đến 10.");
+        if(proposedRating < 1 || proposedRating > 5){
+          throw new Error("Điểm trình tự đề xuất phải từ 1,00 đến 5,00.");
         }
 
-        const difference = Math.abs(enteredTotal - totalScore);
+        const difference = Math.abs(proposedRating - calculatedProposedRating);
         if(difference > 0.05){
           const ok = confirm(
-            "Tổng điểm nhập tay đang lệch " + difference.toFixed(2) +
-            " so với tổng hệ thống tính.\n\n" +
+            "Điểm trình bạn đề xuất đang lệch " + difference.toFixed(2) +
+            " so với mức hệ thống quy đổi (" + formatRating(calculatedProposedRating) + ").\n\n" +
             "Bạn vẫn muốn gửi để Hội đồng chấm trình xem xét?"
           );
           if(!ok) return;
@@ -4885,9 +4882,10 @@ document
               tactical: tactical,
               experience: experience,
               competition: competition,
-              total_score: enteredTotal,
-              calculated_total_score: totalScore,
+              total_score: calculatedTotalScore,
+              calculated_total_score: calculatedTotalScore,
               proposed_rating: proposedRating,
+              calculated_proposed_rating: calculatedProposedRating,
               status: "pending",
               reviewer_note: null
             });
