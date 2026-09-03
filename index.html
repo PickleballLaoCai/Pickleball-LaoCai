@@ -8295,7 +8295,7 @@ async function renderTournamentPanel() {
 
                             <strong>
                               ${escapeHtml(
-                                match.round_name ||
+                                publicRoundLabel(match.round_name) ||
                                 "Vòng đấu"
                               )}
                             </strong>
@@ -14837,6 +14837,417 @@ function startAutoRefresh() {
     60000
   );
 
+}
+
+
+
+/* =========================================================
+   FINAL DOUBLE ELIMINATION ENGINE — V13
+   Mục tiêu:
+   - UI chỉ hiển thị Vòng 1 → Vòng 2 → Vòng 3 → ... → Chung kết.
+   - Không hiển thị "Nhánh thắng / Nhánh thua".
+   - WB và LB vẫn được quản lý nội bộ.
+   - Vòng sau được materialize từ kết quả đã có, kể cả khi mở lại giải.
+   - Trận cũ không bị xoá.
+   - BYE tự hoàn tất và không cập nhật rating.
+   - Luồng rating hiện hữu KHÔNG bị thay đổi.
+========================================================= */
+
+async function _finalInsertRoundRows(
+  tournamentId,
+  roundName,
+  pairs,
+  targetScore,
+  note
+){
+  if(!pairs || !pairs.length) return [];
+
+  const existing = getTournamentMatches(tournamentId)
+    .filter(m => String(m.round_name || "") === String(roundName));
+
+  if(existing.length) return existing;
+
+  const rows = [];
+  let matchNo = 1;
+
+  for(const pair of pairs){
+
+    const a = pair?.[0] || null;
+    const b = pair?.[1] || null;
+
+    if(!a) continue;
+
+    if(b){
+      rows.push({
+        tournament_id: tournamentId,
+        round_name: roundName,
+        match_no: matchNo++,
+        team_a: a,
+        team_b: b,
+        target_score: targetScore,
+        status: "scheduled",
+        notes: note
+      });
+    }else{
+      rows.push({
+        tournament_id: tournamentId,
+        round_name: roundName,
+        match_no: matchNo++,
+        team_a: a,
+        team_b: null,
+        target_score: targetScore,
+        score_a: targetScore,
+        score_b: 0,
+        status: "completed",
+        notes: (note || "") + " — BYE, không tính rating"
+      });
+    }
+  }
+
+  if(!rows.length) return [];
+
+  const {data, error} = await supabaseClient
+    .from("matches")
+    .insert(rows)
+    .select("*");
+
+  if(error) throw error;
+
+  matches.push(...(data || []));
+  return data || [];
+}
+
+function _finalCompletedRound(tournamentId, roundName){
+  return getTournamentMatches(tournamentId)
+    .filter(m => String(m.round_name || "") === String(roundName))
+    .sort((a,b) => Number(a.match_no || 0) - Number(b.match_no || 0));
+}
+
+function _finalPair(ids){
+  const clean = [];
+  for(const id of ids || []){
+    if(id && !clean.some(x => String(x) === String(id))){
+      clean.push(id);
+    }
+  }
+  const pairs = [];
+  for(let i=0; i<clean.length; i += 2){
+    if(clean[i]) pairs.push([clean[i], clean[i+1] || null]);
+  }
+  return pairs;
+}
+
+async function _finalSyncDoubleElimination(tournamentId){
+
+  const tournament = tournamentById(tournamentId);
+  if(!tournament || tournament.format !== "double_elimination"){
+    return false;
+  }
+
+  /*
+   * BYE phải được hoàn tất trước khi lấy winner/loser.
+   * Không gọi continueProgress để tránh đệ quy.
+   */
+  await processByeMatches(tournamentId, false);
+
+  let changed = false;
+
+  /*
+   * Xử lý tuần tự đủ nhiều vòng.
+   *
+   * WB(n) hoàn thành
+   *   -> tạo WB(n+1)
+   *
+   * WB(1) hoàn thành
+   *   -> tạo LB(1) từ các đội thua WB(1)
+   *
+   * LB(n-1) + WB(n) hoàn thành
+   *   -> tạo LB(n) từ:
+   *      LB(n-1) winners + WB(n) losers
+   *
+   * Đây là cấu trúc Double Elimination chuẩn theo từng tầng,
+   * nhưng UI sẽ gom WB(n) và LB(n-1) vào cùng "Vòng n".
+   */
+  for(let n = 1; n <= 32; n++){
+
+    const wbName = "Nhánh thắng — Vòng " + n;
+    const wb = _finalCompletedRound(tournamentId, wbName);
+
+    if(wb.length && wb.every(matchCompleted)){
+
+      const wbWinners = wb.map(matchWinnerId).filter(Boolean);
+
+      if(wbWinners.length > 1){
+
+        const nextWBName = "Nhánh thắng — Vòng " + (n + 1);
+
+        if(!_finalCompletedRound(tournamentId, nextWBName).length){
+          const inserted = await _finalInsertRoundRows(
+            tournamentId,
+            nextWBName,
+            _finalPair(wbWinners),
+            15,
+            "Tự động: đội thắng Vòng " + n + " gặp nhau"
+          );
+          if(inserted.length) changed = true;
+        }
+      }
+
+      /*
+       * LB1 = các đội thua WB1.
+       */
+      if(n === 1){
+
+        const losers = wb
+          .map(matchLoserId)
+          .filter(Boolean)
+          .filter(id => !teamHasTwoLosses(tournamentId, id));
+
+        if(losers.length){
+
+          const lb1Name = "Nhánh thua — Vòng 1";
+
+          if(!_finalCompletedRound(tournamentId, lb1Name).length){
+            const inserted = await _finalInsertRoundRows(
+              tournamentId,
+              lb1Name,
+              _finalPair(losers),
+              15,
+              "Tự động: đội thua Vòng 1 gặp nhau"
+            );
+            if(inserted.length) changed = true;
+          }
+        }
+      }
+    }
+
+    /*
+     * LB(n) từ:
+     *   winners của LB(n-1)
+     *   +
+     *   losers của WB(n)
+     *
+     * Chỉ tạo khi cả hai nguồn đã hoàn thành.
+     */
+    if(n >= 2){
+
+      const previousLBName = "Nhánh thua — Vòng " + (n - 1);
+      const previousLB = _finalCompletedRound(
+        tournamentId,
+        previousLBName
+      );
+
+      const wbCurrent = _finalCompletedRound(
+        tournamentId,
+        wbName
+      );
+
+      if(
+        previousLB.length &&
+        previousLB.every(matchCompleted) &&
+        wbCurrent.length &&
+        wbCurrent.every(matchCompleted)
+      ){
+
+        const lbWinners = previousLB
+          .map(matchWinnerId)
+          .filter(Boolean)
+          .filter(id => !teamHasTwoLosses(tournamentId, id));
+
+        const wbLosers = wbCurrent
+          .map(matchLoserId)
+          .filter(Boolean)
+          .filter(id => !teamHasTwoLosses(tournamentId, id));
+
+        const entrants = [];
+
+        /*
+         * Xen kẽ để tránh hai nguồn bị dồn thành một phía.
+         */
+        const max = Math.max(lbWinners.length, wbLosers.length);
+
+        for(let i = 0; i < max; i++){
+          if(lbWinners[i]) entrants.push(lbWinners[i]);
+          if(wbLosers[i]) entrants.push(wbLosers[i]);
+        }
+
+        const lbName = "Nhánh thua — Vòng " + n;
+
+        if(
+          entrants.length &&
+          !_finalCompletedRound(tournamentId, lbName).length
+        ){
+
+          const inserted = await _finalInsertRoundRows(
+            tournamentId,
+            lbName,
+            _finalPair(entrants),
+            15,
+            "Tự động: đội thắng nhánh thua gặp đội thua nhánh thắng"
+          );
+
+          if(inserted.length) changed = true;
+        }
+      }
+    }
+  }
+
+  /*
+   * Grand Final:
+   * - WB cuối chỉ còn 1 trận và đã xong => WB champion.
+   * - LB cuối chỉ còn 1 trận và đã xong => LB champion.
+   */
+  const all = getTournamentMatches(tournamentId);
+
+  const wbRounds = [...new Set(
+    all
+      .map(m => String(m.round_name || ""))
+      .filter(name => /^Nhánh thắng — Vòng \d+$/u.test(name))
+      .map(name => Number(name.match(/(\d+)$/)?.[1] || 0))
+      .filter(Boolean)
+  )].sort((a,b) => a-b);
+
+  const lbRounds = [...new Set(
+    all
+      .map(m => String(m.round_name || ""))
+      .filter(name => /^Nhánh thua — Vòng \d+$/u.test(name))
+      .map(name => Number(name.match(/(\d+)$/)?.[1] || 0))
+      .filter(Boolean)
+  )].sort((a,b) => a-b);
+
+  let wbChampion = null;
+  let lbChampion = null;
+
+  if(wbRounds.length){
+    const lastWB = _finalCompletedRound(
+      tournamentId,
+      "Nhánh thắng — Vòng " + wbRounds[wbRounds.length - 1]
+    );
+    if(lastWB.length === 1 && matchCompleted(lastWB[0])){
+      wbChampion = matchWinnerId(lastWB[0]);
+    }
+  }
+
+  if(lbRounds.length){
+    const lastLB = _finalCompletedRound(
+      tournamentId,
+      "Nhánh thua — Vòng " + lbRounds[lbRounds.length - 1]
+    );
+    if(lastLB.length === 1 && matchCompleted(lastLB[0])){
+      lbChampion = matchWinnerId(lastLB[0]);
+    }
+  }
+
+  if(
+    wbChampion &&
+    lbChampion &&
+    String(wbChampion) !== String(lbChampion)
+  ){
+
+    const gf = all.find(m =>
+      String(m.round_name || "") === "Grand Final"
+    );
+
+    if(!gf){
+      const inserted = await _finalInsertRoundRows(
+        tournamentId,
+        "Grand Final",
+        [[wbChampion, lbChampion]],
+        15,
+        "Chung kết Double Elimination"
+      );
+      if(inserted.length) changed = true;
+    }
+  }
+
+  return changed;
+}
+
+/*
+ * Ghi đè các hàm điều phối DE cũ bằng một engine duy nhất.
+ * Các hàm cũ vẫn tồn tại trong file để không làm mất API,
+ * nhưng mọi luồng mới sẽ đi qua engine này.
+ */
+async function ensureDoubleEliminationStageTwo(tournamentId){
+  return await _finalSyncDoubleElimination(tournamentId);
+}
+
+async function advanceDoubleEliminationProgress(
+  tournamentId,
+  shouldRender = true
+){
+  const changed = await _finalSyncDoubleElimination(tournamentId);
+
+  if(shouldRender && typeof renderTournamentPanel === "function"){
+    await renderTournamentPanel();
+  }
+
+  return changed;
+}
+
+async function advanceDoubleElimination(
+  tournament,
+  match,
+  winner,
+  loser
+){
+  if(!tournament) return;
+
+  const isBye =
+    String(match?.notes || "").toLowerCase().includes("bye");
+
+  if(!isBye && match){
+    await saveHeadToHead(tournament.id, match);
+  }
+
+  await _finalSyncDoubleElimination(tournament.id);
+}
+
+/*
+ * Override public label:
+ * tuyệt đối không để "Nhánh thắng / Nhánh thua" lọt ra giao diện.
+ */
+function publicRoundInfo(roundName){
+
+  const name = String(roundName || "").trim();
+
+  if(/grand\s*final\s*—\s*reset/i.test(name)){
+    return {order:1001, label:"Chung kết lại"};
+  }
+
+  if(/grand\s*final|chung\s*kết/i.test(name)){
+    return {order:1000, label:"Chung kết"};
+  }
+
+  if(/tứ\s*kết/i.test(name)){
+    return {order:900, label:"Tứ kết"};
+  }
+
+  if(/bán\s*kết/i.test(name)){
+    return {order:950, label:"Bán kết"};
+  }
+
+  const m = name.match(/Vòng\s+(\d+)/i);
+
+  if(m){
+    const n = Number(m[1]);
+    const isLosers = /^Nhánh thua/i.test(name);
+
+    return {
+      order: isLosers ? n + 1 : n,
+      label: "Vòng " + (isLosers ? n + 1 : n)
+    };
+  }
+
+  if(/playoff/i.test(name)){
+    return {order:2, label:"Vòng 2"};
+  }
+
+  return {order:500, label:name || "Vòng đấu"};
+}
+
+function publicRoundLabel(roundName){
+  return publicRoundInfo(roundName).label;
 }
 
 
