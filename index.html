@@ -10324,7 +10324,7 @@ async function renderCompetitionStructure(
   await advanceDoubleEliminationProgress(tournamentId, false);
 
   const directMatches =
-    getTournamentMatches(tournamentId);
+    buildDisplayDoubleEliminationMatches(tournamentId);
 
   const roundMap = new Map();
 
@@ -10444,7 +10444,11 @@ async function renderCompetitionStructure(
             ? `
               <button
                 class="btn primary direct-bracket-result-btn"
-                onclick="openMatchResultModal('${match.id}')">
+                onclick="${
+                  match.__virtual
+                    ? `materializeVirtualDirectMatch('${esc(tournamentId)}','${esc(match.round_name)}',${Number(match.match_no || 0)},'${esc(match.team_a)}','${esc(match.team_b)}')`
+                    : `openMatchResultModal('${match.id}')`
+                }">
                 Nhập kết quả
               </button>
             `
@@ -10494,7 +10498,7 @@ async function renderCompetitionStructure(
 
     <div class="notice">
       Các vòng thi đấu hiển thị liên tục từ trái sang phải.
-      Đội thắng và đội thua được hệ thống tự động xếp vào
+      Các đội được hệ thống tự động xếp vào
       trận tiếp theo. Trận đã đấu vẫn được giữ nguyên.
     </div>
 
@@ -10526,6 +10530,19 @@ async function renderCompetitionStructure(
       >
         ⚡ Tạo vòng 1
       </button>
+
+      ${
+        isAdmin()
+          ? `
+            <button
+              class="btn"
+              onclick="advanceDoubleEliminationProgress('${esc(tournamentId)}', true)"
+            >
+              🔄 Đồng bộ vòng tiếp theo
+            </button>
+          `
+          : ""
+      }
 
     </div>
 
@@ -12844,7 +12861,7 @@ async function insertScheduledMatch(
 }
 
 
-async function processByeMatches(tournamentId, continueProgress = true){
+async function _legacyProcessByeMatches(tournamentId, continueProgress = true){
 
   let changed = true;
 
@@ -14937,7 +14954,7 @@ function _finalPair(ids){
   return pairs;
 }
 
-async function _finalSyncDoubleElimination(tournamentId){
+async function _legacyFinalSyncDoubleElimination(tournamentId){
 
   const tournament = tournamentById(tournamentId);
   if(!tournament || tournament.format !== "double_elimination"){
@@ -15161,6 +15178,319 @@ async function _finalSyncDoubleElimination(tournamentId){
   }
 
   return changed;
+}
+
+
+/* =========================================================
+   FINAL DE ENGINE — DISPLAY + SAFE PUBLIC READ
+   ---------------------------------------------------------
+   Nguyên tắc:
+   1) Trang công khai chỉ ĐỌC, không tự INSERT/UPDATE matches.
+   2) Khi quản trị đã đăng nhập, engine cũ vẫn được dùng để
+      vật chất hoá các trận thật trong DB.
+   3) Nếu Vòng tiếp theo chưa được vật chất hoá, giao diện
+      dựng các cặp "dự kiến" từ kết quả hiện có để người xem
+      vẫn thấy Vòng 2/Vòng 3... ngay lập tức.
+   4) Khi trận thật được tạo, nó tự thay thế bản dự kiến.
+========================================================= */
+
+function _finalIsAdminContext(){
+  return !!(
+    typeof isAdmin === "function" &&
+    isAdmin()
+  );
+}
+
+async function processByeMatches(tournamentId, continueProgress = true){
+  if(!_finalIsAdminContext()){
+    return false;
+  }
+  return await _legacyProcessByeMatches(
+    tournamentId,
+    continueProgress
+  );
+}
+
+function _finalVirtualMatch(
+  tournamentId,
+  roundName,
+  matchNo,
+  teamA,
+  teamB,
+  targetScore,
+  note
+){
+  const isBye = !!teamA && !teamB;
+
+  return {
+    id: null,
+    tournament_id: tournamentId,
+    round_name: roundName,
+    match_no: matchNo,
+    team_a: teamA || null,
+    team_b: teamB || null,
+    target_score: targetScore || 15,
+    score_a: isBye ? (targetScore || 15) : null,
+    score_b: isBye ? 0 : null,
+    status: isBye ? "completed" : "scheduled",
+    notes: (note || "") + (isBye ? " — BYE, không tính rating" : ""),
+    __virtual: true
+  };
+}
+
+function _finalUniqueIds(ids){
+  const out=[];
+  for(const id of ids || []){
+    if(id !== null && id !== undefined && id !== "" &&
+       !out.some(x => String(x) === String(id))){
+      out.push(id);
+    }
+  }
+  return out;
+}
+
+function _finalPairIds(ids){
+  const clean=_finalUniqueIds(ids);
+  const pairs=[];
+  for(let i=0;i<clean.length;i+=2){
+    pairs.push([
+      clean[i] || null,
+      clean[i+1] || null
+    ]);
+  }
+  return pairs;
+}
+
+function _finalRoundMatches(all, prefix, n){
+  return all
+    .filter(m =>
+      String(m.round_name || "") ===
+      `${prefix} — Vòng ${n}`
+    )
+    .sort((a,b) =>
+      Number(a.match_no || 0) -
+      Number(b.match_no || 0)
+    );
+}
+
+function _finalCompletedAll(rows){
+  return rows.length > 0 &&
+    rows.every(matchCompleted);
+}
+
+function _finalBuildVirtualDE(tournamentId, actual){
+  const result=[...actual];
+
+  const hasRound=(name)=>
+    actual.some(m => String(m.round_name || "") === name) ||
+    result.some(m => String(m.round_name || "") === name);
+
+  // Không tạo ảo nếu vòng thật đã tồn tại.
+  // Vòng 1 luôn lấy từ DB.
+  for(let n=1;n<=32;n++){
+
+    const wbName=`Nhánh thắng — Vòng ${n}`;
+    const wb=_finalRoundMatches(actual,"Nhánh thắng",n);
+
+    if(wb.length && _finalCompletedAll(wb)){
+
+      const winners=_finalUniqueIds(
+        wb.map(matchWinnerId)
+      );
+
+      const nextWB=`Nhánh thắng — Vòng ${n+1}`;
+
+      if(winners.length>1 && !hasRound(nextWB)){
+        _finalPairIds(winners).forEach((pair,i)=>{
+          result.push(
+            _finalVirtualMatch(
+              tournamentId,
+              nextWB,
+              i+1,
+              pair[0],
+              pair[1],
+              n===1 ? 15 : 15,
+              `Dự kiến: đội thắng Vòng ${n} gặp nhau`
+            )
+          );
+        });
+      }
+
+      /*
+       * Sau Vòng 1: đội thua lần đầu gặp nhau.
+       * Nếu số lẻ thì đội cuối nhận BYE.
+       */
+      if(n===1){
+        const losers=_finalUniqueIds(
+          wb.map(matchLoserId)
+        );
+
+        const lb1=`Nhánh thua — Vòng 1`;
+
+        if(losers.length && !hasRound(lb1)){
+          _finalPairIds(losers).forEach((pair,i)=>{
+            result.push(
+              _finalVirtualMatch(
+                tournamentId,
+                lb1,
+                i+1,
+                pair[0],
+                pair[1],
+                15,
+                `Dự kiến: đội thua Vòng 1 gặp nhau`
+              )
+            );
+          });
+        }
+      }
+    }
+
+    /*
+     * LB(n): winner LB(n-1) + loser WB(n).
+     * Chỉ dựng khi cả hai nguồn đã hoàn thành thật.
+     */
+    if(n>=2){
+
+      const prevLBName=`Nhánh thua — Vòng ${n-1}`;
+      const prevLB=_finalRoundMatches(
+        actual,
+        "Nhánh thua",
+        n-1
+      );
+
+      const currentWB=_finalRoundMatches(
+        actual,
+        "Nhánh thắng",
+        n
+      );
+
+      if(
+        _finalCompletedAll(prevLB) &&
+        _finalCompletedAll(currentWB)
+      ){
+
+        const lbWinners=_finalUniqueIds(
+          prevLB.map(matchWinnerId)
+        );
+
+        const wbLosers=_finalUniqueIds(
+          currentWB.map(matchLoserId)
+        );
+
+        const entrants=[];
+        const max=Math.max(
+          lbWinners.length,
+          wbLosers.length
+        );
+
+        for(let i=0;i<max;i++){
+          if(lbWinners[i]) entrants.push(lbWinners[i]);
+          if(wbLosers[i]) entrants.push(wbLosers[i]);
+        }
+
+        const lbName=`Nhánh thua — Vòng ${n}`;
+
+        if(entrants.length && !hasRound(lbName)){
+          _finalPairIds(entrants).forEach((pair,i)=>{
+            result.push(
+              _finalVirtualMatch(
+                tournamentId,
+                lbName,
+                i+1,
+                pair[0],
+                pair[1],
+                15,
+                `Dự kiến: luồng thua Vòng ${n}`
+              )
+            );
+          });
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+
+async function materializeVirtualDirectMatch(
+  tournamentId,
+  roundName,
+  matchNo,
+  teamA,
+  teamB
+){
+  if(!_finalIsAdminContext()){
+    showToast("Cần đăng nhập quản trị để tạo trận.");
+    return;
+  }
+
+  if(!teamA || !teamB){
+    showToast("Trận BYE không cần nhập kết quả.");
+    return;
+  }
+
+  const exists = getTournamentMatches(tournamentId).find(m =>
+    String(m.round_name || "") === String(roundName) &&
+    Number(m.match_no || 0) === Number(matchNo || 0) &&
+    String(m.team_a || "") === String(teamA || "") &&
+    String(m.team_b || "") === String(teamB || "")
+  );
+
+  if(exists){
+    await openMatchResultModal(exists.id);
+    return;
+  }
+
+  const {data, error} = await supabaseClient
+    .from("matches")
+    .insert({
+      tournament_id: tournamentId,
+      round_name: roundName,
+      match_no: matchNo,
+      team_a: teamA,
+      team_b: teamB,
+      target_score: 15,
+      status: "scheduled",
+      notes: "Tự động tạo từ bracket"
+    })
+    .select("*")
+    .single();
+
+  if(error){
+    console.error("materializeVirtualDirectMatch:", error);
+    showToast(
+      "Không thể tạo trận: " +
+      (error.message || "Lỗi Supabase")
+    );
+    return;
+  }
+
+  matches.push(data);
+  await renderTournamentPanel();
+  await openMatchResultModal(data.id);
+}
+
+function buildDisplayDoubleEliminationMatches(tournamentId){
+  const actual=getTournamentMatches(tournamentId);
+  return _finalBuildVirtualDE(
+    tournamentId,
+    actual
+  );
+}
+
+async function _finalSyncDoubleElimination(tournamentId){
+  /*
+   * Chỉ tài khoản có quyền quản trị mới được ghi matches.
+   * Trang công khai tuyệt đối không tự ghi DB.
+   */
+  if(!_finalIsAdminContext()){
+    return false;
+  }
+
+  return await _legacyFinalSyncDoubleElimination(
+    tournamentId
+  );
 }
 
 /*
