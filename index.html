@@ -15846,11 +15846,8 @@ function _v21BuildDirectDisplay(tournamentId){
 }
 
 function cleanDirectBracketMatches(tournamentId){
+  // V22: chỉ dùng một engine bracket canonical.
   return _v21BuildDirectDisplay(tournamentId);
-}
-
-function cleanDirectBracketMatches(tournamentId){
-  return _v16BuildDirectDisplay(tournamentId);
 }
 
 
