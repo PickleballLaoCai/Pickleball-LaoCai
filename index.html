@@ -7698,7 +7698,7 @@ async function renderTournamentPanel() {
         <div class="direct-bracket-title">
           <div>
             <strong>🏆 Sơ đồ loại trực tiếp</strong>
-            <div class="muted">Vòng đấu chạy từ trái sang phải. Trận đã đấu luôn được giữ lại.</div>
+            <div class="muted">Kết quả hiển thị ngay trong sơ đồ.</div>
           </div>
           <div class="match-summary" style="margin-top:6px;">
             <span class="chip">Tổng ${directMatches.length} trận</span>
@@ -7906,12 +7906,15 @@ async function renderTournamentPanel() {
 
       <!-- ĐIỀU PHỐI TẠO BẢNG / LỊCH -->
 
+      ${
+        tournament.format === "group_stage" || (isAdmin() && canManageTournament(tournament))
+          ? `
       <div
         class="card"
         style="margin-top:18px;">
 
         <div class="section-title">
-          ⚡ Tạo bảng đấu & lịch thi đấu
+          ⚡ ${tournament.format === "group_stage" ? "Tạo bảng đấu & lịch thi đấu" : "Điều phối giải"}
         </div>
 
         ${
@@ -8030,31 +8033,36 @@ async function renderTournamentPanel() {
                     )
               )
             : (
-                tournamentMatches.length === 0
-                  ? `
-                    <div class="empty">
-                      Đã có <b>${paidRegistrationsForTournament(tournament.id).length}</b> đội/người đã nộp phí. Chỉ các đội này được đưa vào Double Elimination.
-                    </div>
-
-                    ${paidRegistrationsForTournament(tournament.id).length >= 2 ? `
-                    <div class="row-actions" style="margin-top:12px;">
-                      <button
-                        class="btn primary"
-                        onclick="generateEliminationMatches('${tournament.id}')">
-                        ⚡ Tạo vòng 1
-                      </button>
-                    </div>` : `
-                    <div class="notice" style="margin-top:12px;">⚠️ Cần ít nhất 2 đội/người được <b>xác nhận nộp phí</b> mới tạo được vòng 1.</div>`}
-                  `
-                  : `
-                    <div class="notice">
-                      Lịch đã tạo.
-                    </div>
-                  `
+                isAdmin() && canManageTournament(tournament)
+                  ? (
+                      tournamentMatches.length === 0
+                        ? `
+                          <div class="row-actions">
+                            ${paidRegistrationsForTournament(tournament.id).length >= 2 ? `
+                              <button
+                                class="btn primary"
+                                onclick="generateEliminationMatches('${tournament.id}')">
+                                ⚡ Tạo vòng 1
+                              </button>
+                            ` : `
+                              <span class="muted">Cần ít nhất 2 đội/người đã xác nhận phí.</span>
+                            `}
+                          </div>
+                        `
+                        : `
+                          <div class="muted">
+                            Bracket đã tạo · ${tournamentMatches.length} trận.
+                          </div>
+                        `
+                    )
+                  : ""
               )
         }
 
       </div>
+      `
+      : ""
+      }
 
 
       ${
