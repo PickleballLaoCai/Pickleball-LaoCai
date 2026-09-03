@@ -6097,6 +6097,49 @@ async function testSupabase(){
    PHẦN 3 SẼ CUNG CẤP CÁC HÀM CÒN LẠI.
 ========================================================= */
 
+
+async function syncExistingDoubleEliminationBrackets(){
+
+  const directTournaments = tournaments.filter(t =>
+    t && t.format === "double_elimination"
+  );
+
+  if(!directTournaments.length) return;
+
+  for(const tournament of directTournaments){
+
+    const tournamentMatches =
+      getTournamentMatches(tournament.id);
+
+    if(!tournamentMatches.length) continue;
+
+    try{
+
+      // Resolve any persisted BYE rows first. This is safe/idempotent.
+      await processByeMatches(
+        tournament.id,
+        false
+      );
+
+      // Materialize the next internal rounds from already completed
+      // rounds. The UI will expose them only as Vòng 1, Vòng 2, ...
+      await advanceDoubleEliminationProgress(
+        tournament.id,
+        false
+      );
+
+    }catch(error){
+
+      console.warn(
+        "Không thể đồng bộ bracket giải",
+        tournament.id,
+        error
+      );
+
+    }
+  }
+}
+
 async function loadAll(){
 
   /*
@@ -6123,6 +6166,9 @@ async function loadAll(){
 
   await loadAllResults();
 
+  // Đồng bộ bracket loại trực tiếp ngay khi mở/tải lại giải.
+  // Không cần người dùng nhập lại kết quả Vòng 1.
+  await syncExistingDoubleEliminationBrackets();
 
   applicationReady =
     true;
@@ -10269,193 +10315,208 @@ async function renderCompetitionStructure(
   /*
     ================================
     LOẠI TRỰC TIẾP
-    = NHÁNH THẮNG / NHÁNH THUA
     ================================
+    Nội bộ vẫn dùng Winners/Losers để điều phối Double Elimination,
+    nhưng giao diện chỉ hiển thị Vòng 1, Vòng 2, Vòng 3...
   */
 
-  const bracket =
-    buildDoubleEliminationPreview(
-      teams
+  await processByeMatches(tournamentId, false);
+  await advanceDoubleEliminationProgress(tournamentId, false);
+
+  const directMatches =
+    getTournamentMatches(tournamentId);
+
+  const roundMap = new Map();
+
+  directMatches.forEach(match => {
+
+    const info = publicRoundInfo(
+      match.round_name
     );
 
+    const key = String(info.order);
+
+    if(!roundMap.has(key)){
+      roundMap.set(key, {
+        order: info.order,
+        label: info.label,
+        matches: []
+      });
+    }
+
+    roundMap.get(key).matches.push(match);
+
+  });
+
+  const directRounds =
+    [...roundMap.values()]
+      .sort((a,b) => a.order - b.order);
+
+  const directMatchCard = match => {
+
+    const completed =
+      matchCompleted(match);
+
+    const bye =
+      !match.team_b ||
+      String(match.notes || "")
+        .toLowerCase()
+        .includes("bye");
+
+    const scoreA =
+      match.score_a !== null &&
+      match.score_a !== undefined
+        ? match.score_a
+        : "—";
+
+    const scoreB =
+      match.score_b !== null &&
+      match.score_b !== undefined
+        ? match.score_b
+        : (bye ? "0" : "—");
+
+    const winnerA =
+      completed &&
+      Number(match.score_a) >
+      Number(match.score_b);
+
+    const winnerB =
+      completed &&
+      Number(match.score_b) >
+      Number(match.score_a);
+
+    return `
+      <div class="direct-bracket-match ${
+        completed ? "is-completed" : ""
+      } ${bye ? "is-bye" : ""}">
+
+        <div class="direct-bracket-match-head">
+          <span>
+            Trận ${escapeHtml(
+              String(match.match_no || "")
+            )}
+          </span>
+
+          <span>
+            ${bye
+              ? "BYE"
+              : completed
+                ? "Đã đấu"
+                : "Chưa đấu"}
+          </span>
+        </div>
+
+        <div class="direct-bracket-team ${
+          winnerA ? "winner" : ""
+        }">
+          <span>
+            ${escapeHtml(
+              getMatchSideName(match.team_a)
+            )}
+          </span>
+
+          <strong>${escapeHtml(
+            String(scoreA)
+          )}</strong>
+        </div>
+
+        <div class="direct-bracket-team ${
+          winnerB ? "winner" : ""
+        }">
+          <span>
+            ${escapeHtml(
+              match.team_b
+                ? getMatchSideName(match.team_b)
+                : "BYE"
+            )}
+          </span>
+
+          <strong>${escapeHtml(
+            String(scoreB)
+          )}</strong>
+        </div>
+
+        ${
+          !completed &&
+          match.team_a &&
+          match.team_b &&
+          canManageMatch(match)
+            ? `
+              <button
+                class="btn primary direct-bracket-result-btn"
+                onclick="openMatchResultModal('${match.id}')">
+                Nhập kết quả
+              </button>
+            `
+            : ""
+        }
+
+      </div>
+    `;
+
+  };
+
+  const directColumns =
+    directRounds.map(round => {
+
+      const sorted =
+        round.matches.slice().sort(
+          (a,b) =>
+            Number(a.match_no || 0) -
+            Number(b.match_no || 0)
+        );
+
+      return `
+        <div class="direct-bracket-column">
+
+          <div class="direct-bracket-column-title">
+            ${escapeHtml(round.label)}
+          </div>
+
+          <div class="direct-bracket-column-matches">
+            ${
+              sorted
+                .map(directMatchCard)
+                .join("")
+            }
+          </div>
+
+        </div>
+      `;
+
+    }).join("");
 
   area.innerHTML = `
 
     <h3>
-      🏆 Nhánh thắng / Nhánh thua
+      🏆 Lịch thi đấu loại trực tiếp
     </h3>
 
-
     <div class="notice">
-
-      <b>
-        Loại trực tiếp
-      </b>
-
-      <br>
-
-      Thua lần 1:
-      <b>
-        xuống nhánh thua
-      </b>
-
-      <br>
-
-      Thua lần 2:
-      <b>
-        bị loại
-      </b>
-
-      <br>
-
-      Đội vô địch nhánh thắng
-      gặp đội vô địch nhánh thua
-      ở chung kết.
-
+      Các vòng thi đấu hiển thị liên tục từ trái sang phải.
+      Đội thắng và đội thua được hệ thống tự động xếp vào
+      trận tiếp theo. Trận đã đấu vẫn được giữ nguyên.
     </div>
 
+    ${
+      directColumns
+        ? `
+          <div class="direct-bracket-shell">
 
-    <div class="bracket-wrap">
-
-      <div class="bracket">
-
-
-        <div class="bracket-round">
-
-          <h4>
-            Nhánh thắng — Vòng 1
-          </h4>
-
-
-          ${
-            bracket.firstRound
-              .map(
-                match => `
-
-                  <div class="match-card">
-
-                    <div class="match-title">
-
-                      Trận ${match.number}
-
-                    </div>
-
-
-                    <div class="team-line">
-
-                      ${
-                        match.teamA
-                          ? esc(
-                              match.teamA.name
-                            )
-                          : "BYE"
-                      }
-
-                    </div>
-
-
-                    <div class="team-line">
-
-                      ${
-                        match.teamB
-                          ? esc(
-                              match.teamB.name
-                            )
-                          : "BYE"
-                      }
-
-                    </div>
-
-                  </div>
-
-                `
-              )
-              .join("")
-          }
-
-        </div>
-
-
-        <div class="bracket-round">
-
-          <h4>
-            Nhánh thua
-          </h4>
-
-
-          ${
-            bracket.loserRounds
-              .map(
-                (round,index) => `
-
-                  <div class="match-card">
-
-                    <div class="match-title">
-
-                      ${esc(
-                        "Nhánh thua — Vòng "
-                        +
-                        (index + 1)
-                      )}
-
-                    </div>
-
-
-                    <div class="team-line">
-
-                      Đội thua từ nhánh thắng
-
-                    </div>
-
-
-                    <div class="team-line">
-
-                      Đội từ vòng trước
-
-                    </div>
-
-                  </div>
-
-                `
-              )
-              .join("")
-          }
-
-        </div>
-
-
-        <div class="bracket-round">
-
-          <h4>
-            Chung kết
-          </h4>
-
-
-          <div class="match-card">
-
-            <div class="match-title">
-              Grand Final
-            </div>
-
-
-            <div class="team-line">
-              Vô địch nhánh thắng
-            </div>
-
-
-            <div class="team-line">
-              Vô địch nhánh thua
+            <div class="direct-bracket-scroll">
+              <div class="direct-bracket">
+                ${directColumns}
+              </div>
             </div>
 
           </div>
-
-        </div>
-
-
-      </div>
-
-    </div>
-
+        `
+        : `
+          <div class="empty">
+            Chưa có vòng đấu. Hãy tạo Vòng 1.
+          </div>
+        `
+    }
 
     <div class="actions">
 
@@ -10469,6 +10530,8 @@ async function renderCompetitionStructure(
     </div>
 
   `;
+
+  return;
 
 }
 
@@ -14160,12 +14223,28 @@ async function openAdminPanel(expectedRole){
         </div>
         <div class="field">
           <label>Email quản trị</label>
-          <input id="adminEmail" type="email" autocomplete="username" placeholder="email">
+          <input
+            id="${isClubLogin ? "clubAdminEmail" : "superAdminEmail"}"
+            name="${isClubLogin ? "club_admin_email" : "super_admin_email"}"
+            type="email"
+            autocomplete="off"
+            inputmode="email"
+            placeholder="email">
         </div>
-        <input id="expectedAdminRole" type="hidden" value="${expectedRole || ""}">
+
+        <input
+          id="expectedAdminRole"
+          type="hidden"
+          value="${expectedRole || ""}">
+
         <div class="field">
           <label>Mật khẩu</label>
-          <input id="adminPassword" type="password" autocomplete="current-password" placeholder="Mật khẩu">
+          <input
+            id="${isClubLogin ? "clubAdminPassword" : "superAdminPassword"}"
+            name="${isClubLogin ? "club_admin_password" : "super_admin_password"}"
+            type="password"
+            autocomplete="new-password"
+            placeholder="Mật khẩu">
         </div>
         <div class="actions">
           <button class="btn btn-primary" onclick="adminLogin()">🔐 Đăng nhập</button>
@@ -14196,8 +14275,24 @@ async function openAdminPanel(expectedRole){
 }
 
 async function adminLogin(){
-  const email = document.getElementById("adminEmail")?.value.trim();
-  const password = document.getElementById("adminPassword")?.value || "";
+  const expectedRole =
+    document.getElementById("expectedAdminRole")?.value || "";
+
+  const emailId =
+    expectedRole === "club_admin"
+      ? "clubAdminEmail"
+      : "superAdminEmail";
+
+  const passwordId =
+    expectedRole === "club_admin"
+      ? "clubAdminPassword"
+      : "superAdminPassword";
+
+  const email =
+    document.getElementById(emailId)?.value.trim();
+
+  const password =
+    document.getElementById(passwordId)?.value || "";
   if(!email || !password){
     showToast("Nhập email và mật khẩu.");
     return;
@@ -14215,7 +14310,6 @@ async function adminLogin(){
     showToast("Tài khoản chưa được cấp quyền quản trị.");
     return;
   }
-  const expectedRole = document.getElementById("expectedAdminRole")?.value || "";
   if(expectedRole && currentAdmin.role !== expectedRole){
     await supabaseClient.auth.signOut();
     currentSession = null;
