@@ -7700,7 +7700,11 @@ async function renderTournamentPanel() {
             <strong>🏆 Sơ đồ loại trực tiếp</strong>
             <div class="muted">Vòng đấu chạy từ trái sang phải. Trận đã đấu luôn được giữ lại.</div>
           </div>
-          <span class="chip">${directMatches.length} trận</span>
+          <div class="match-summary" style="margin-top:6px;">
+            <span class="chip">Tổng ${directMatches.length} trận</span>
+            <span class="chip">${directMatches.filter(matchCompleted).length} đã đấu</span>
+            <span class="chip">${directMatches.filter(m => !matchCompleted(m)).length} chưa đấu</span>
+          </div>
         </div>
         <div class="direct-bracket-scroll">
           <div class="direct-bracket">
@@ -8044,9 +8048,7 @@ async function renderTournamentPanel() {
                   `
                   : `
                     <div class="notice">
-                      Lịch Double Elimination đã được tạo.
-                      <br>
-                      Hệ thống sẽ tự mở các vòng tiếp theo sau khi nhập kết quả.
+                      Lịch đã tạo.
                     </div>
                   `
               )
@@ -8055,22 +8057,25 @@ async function renderTournamentPanel() {
       </div>
 
 
-      <!-- LỊCH THI ĐẤU -->
+      ${
+        tournament.format === "group_stage"
+          ? `
+      <!-- LỊCH THI ĐẤU: chia bảng -->
 
       <div
         class="card"
         style="margin-top:18px;">
 
         <div class="section-title">
-
           📅 Lịch thi đấu
-
         </div>
-
 
         ${scheduleHtml}
 
       </div>
+          `
+          : ""
+      }
 
 
       <!-- BẢNG / BRACKET -->
@@ -8085,7 +8090,7 @@ async function renderTournamentPanel() {
             tournament.format ===
             "group_stage"
               ? "📊 Bảng đấu & xếp hạng"
-              : "🏆 Bảng đấu / Bracket"
+              : "🏆 Sơ đồ thi đấu"
           }
 
         </div>
@@ -8101,141 +8106,13 @@ async function renderTournamentPanel() {
       </div>
 
 
-      <!-- KẾT QUẢ -->
-
-      <div
-        class="card"
-        style="margin-top:18px;">
-
-        <div class="section-title">
-
-          📋 Kết quả trận đấu
-
-        </div>
-
-
-        ${
-          completedMatches.length
-            ? `
-
-              <div class="match-list">
-
-                ${
-                  completedMatches
-                    .map(match => {
-
-                      const sideA =
-                        getMatchSideName(
-                          match.team_a
-                        );
-
-
-                      const sideB =
-                        getMatchSideName(
-                          match.team_b
-                        );
-
-
-                      return `
-
-                        <div
-                          class="match-card">
-
-                          <div
-                            class="match-top">
-
-                            <strong>
-                              ${escapeHtml(
-                                publicRoundLabel(match.round_name) ||
-                                "Vòng đấu"
-                              )}
-                            </strong>
-
-                            <span class="badge">
-                              Đã kết thúc
-                            </span>
-
-                          </div>
-
-
-                          <div
-                            class="match-body">
-
-                            <div
-                              class="team">
-
-                              <div
-                                class="team-name">
-
-                                ${escapeHtml(
-                                  sideA
-                                )}
-
-                              </div>
-
-                              <div
-                                class="score">
-
-                                ${
-                                  match.score_a ??
-                                  "—"
-                                }
-
-                              </div>
-
-                            </div>
-
-
-                            <div class="vs">
-                              VS
-                            </div>
-
-
-                            <div
-                              class="team">
-
-                              <div
-                                class="team-name">
-
-                                ${escapeHtml(
-                                  sideB
-                                )}
-
-                              </div>
-
-                              <div
-                                class="score">
-
-                                ${
-                                  match.score_b ??
-                                  "—"
-                                }
-
-                              </div>
-
-                            </div>
-
-                          </div>
-
-                        </div>
-
-                      `;
-
-                    })
-                    .join("")
-                }
-
-              </div>
-
-            `
-            : `
-              <div class="empty">
-                Chưa có trận nào hoàn thành.
-              </div>
-            `
-        }
-
-      </div>
+      ${
+        tournament.format === "group_stage"
+          ? `
+${block}
+          `
+          : ""
+      }
 
     </div>
 
@@ -10349,11 +10226,7 @@ async function renderCompetitionStructure(
       🏆 Sơ đồ loại trực tiếp
     </h3>
 
-    <div class="notice">
-      Các vòng thi đấu hiển thị liên tục từ trái sang phải.
-      Các đội được hệ thống tự động xếp vào
-      trận tiếp theo. Trận đã đấu vẫn được giữ nguyên.
-    </div>
+
 
     ${
       directColumns
