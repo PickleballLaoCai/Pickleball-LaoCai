@@ -1024,6 +1024,160 @@ textarea{
 }
 
 
+
+/* =========================================================
+   GIẢI ĐẤU FINAL — GIAO DIỆN ĐĂNG KÝ / LỊCH THI ĐẤU
+========================================================= */
+.registration-hero{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:10px;
+  margin:10px 0 14px;
+}
+.registration-stat{
+  border:1px solid #ead8e4;
+  border-radius:12px;
+  padding:12px;
+  background:#fff;
+}
+.registration-stat strong{
+  display:block;
+  font-size:20px;
+  margin-top:3px;
+}
+.registration-stat.success{background:#ecfff2}
+.registration-stat.warning{background:#fff8e8}
+.registration-stat.neutral{background:#f7f7f7}
+.registration-list{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.registration-card{
+  border:1px solid #e5d7e1;
+  border-radius:14px;
+  padding:12px;
+  background:#fff;
+}
+.registration-card-grid{
+  display:grid;
+  grid-template-columns:minmax(0,2.2fr) minmax(150px,.8fr) minmax(220px,1fr);
+  gap:14px;
+  align-items:center;
+}
+.registration-players{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:8px;
+}
+.registration-player{
+  display:flex;
+  gap:9px;
+  align-items:center;
+  min-width:0;
+}
+.registration-player-avatar{
+  width:44px;
+  height:44px;
+  border-radius:50%;
+  object-fit:cover;
+  border:2px solid #d8eee2;
+  background:#f5f5f5;
+  flex:0 0 auto;
+}
+.registration-player-name{
+  font-weight:800;
+  overflow:hidden;
+  text-overflow:ellipsis;
+}
+.registration-rating-box{
+  text-align:center;
+  border-left:1px solid #eee;
+  border-right:1px solid #eee;
+  padding:4px 10px;
+}
+.registration-rating-total{
+  font-size:22px;
+  font-weight:900;
+}
+.registration-rating-warning{
+  color:#d00000;
+  font-weight:800;
+  font-size:12px;
+  margin-top:4px;
+}
+.registration-meta{
+  font-size:12px;
+  color:#666;
+  margin-top:4px;
+}
+.direct-schedule-shell{
+  overflow-x:auto;
+  padding:4px 2px 12px;
+}
+.direct-schedule{
+  display:flex;
+  align-items:flex-start;
+  gap:14px;
+  min-width:max-content;
+}
+.direct-schedule-column{
+  width:250px;
+  flex:0 0 250px;
+}
+.direct-schedule-column-title{
+  text-align:center;
+  font-weight:900;
+  padding:9px;
+  border-radius:10px;
+  background:#f4e7ef;
+  margin-bottom:10px;
+}
+.direct-schedule-column-matches{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+.direct-schedule-match{
+  border:1px solid #dfc9d8;
+  border-radius:12px;
+  overflow:hidden;
+  background:#fff;
+}
+.direct-schedule-match-head{
+  display:flex;
+  justify-content:space-between;
+  padding:7px 9px;
+  font-size:12px;
+  color:#666;
+  background:#faf7f9;
+}
+.direct-schedule-team{
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  padding:9px;
+  border-top:1px solid #eee;
+}
+.direct-schedule-team.winner{
+  background:#eaf8ef;
+  font-weight:800;
+}
+.direct-schedule-team-name{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+@media(max-width:800px){
+  .registration-hero{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .registration-card-grid{grid-template-columns:1fr}
+  .registration-players{grid-template-columns:1fr}
+  .registration-rating-box{
+    border-left:0;border-right:0;border-top:1px solid #eee;border-bottom:1px solid #eee;
+  }
+}
+
 /* =========================================================
    BRACKET
 ========================================================= */
@@ -6849,9 +7003,16 @@ async function renderTournamentPanel() {
     "double_elimination"
   ){
     try{
-      await ensureDoubleEliminationStageTwo(
-        tournament.id
-      );
+      /*
+       * Khôi phục đúng trạng thái bracket khi mở lại giải:
+       * 1) BYE phải được hoàn tất trước;
+       * 2) sau đó mới tạo Vòng 2;
+       * 3) các vòng đã đủ kết quả tiếp tục được vật chất hoá.
+       * Không render lồng nhau trong bước này.
+       */
+      await processByeMatches(tournament.id, false);
+      await ensureDoubleEliminationStageTwo(tournament.id);
+      await advanceDoubleEliminationProgress(tournament.id, false);
     }catch(error){
       console.error(
         "ensureDoubleEliminationStageTwo on render:",
@@ -6959,145 +7120,80 @@ async function renderTournamentPanel() {
         ${Number.isFinite(Number(tournament.rating_limit)) ? `<br><span style="color:#c00;font-weight:800;">🔴 Vượt giới hạn trình vẫn được đăng ký, nhưng sẽ được cảnh báo để Ban tổ chức xem xét.</span>` : ""}
       </div>
 
-      <div class="table-wrap">
+      <div class="registration-list">
+        ${
+          tournamentRegistrations
+            .map((reg, index) => {
 
-        <table>
+              const member1 = members.find(m => String(m.id) === String(reg.member_id));
+              const member2 = members.find(m => String(m.id) === String(reg.member2_id));
 
-          <thead>
+              const r1 = member1 ? Number(member1.rating || 1) : 0;
+              const r2 = member2 ? Number(member2.rating || 1) : 0;
+              const total = member2 ? r1 + r2 : r1;
+              const limit = Number(tournament.rating_limit);
+              const over = Number.isFinite(limit) && total > limit;
 
-            <tr>
+              const avatar = member => member?.avatar_url || "";
 
-              <th>#</th>
+              return `
+                <div class="registration-card">
+                  <div class="registration-card-grid">
 
-              <th>
-                ${
-                  tournament.competition_type ===
-                  "doubles"
-                    ? "Đội"
-                    : "Người chơi"
-                }
-              </th>
+                    <div>
+                      <div style="font-weight:900;margin-bottom:7px;">
+                        #${index + 1}
+                        ${escapeHtml(reg.team_name || getTeamDisplayName(reg))}
+                      </div>
 
-             <th>Tổng trình</th>
+                      <div class="registration-players">
+                        ${member1 ? `
+                          <div class="registration-player">
+                            ${avatar(member1) ? `<img class="registration-player-avatar" src="${escapeHtml(avatar(member1))}" alt="">` : `<div class="registration-player-avatar"></div>`}
+                            <div>
+                              <div class="registration-player-name">${escapeHtml(member1.full_name || "")}</div>
+                              <div class="registration-meta">📞 ${escapeHtml(member1.phone || "")}${member1.club ? " · " + escapeHtml(member1.club) : ""}</div>
+                              <div class="registration-meta">Trình ${formatRating(member1.rating)}</div>
+                            </div>
+                          </div>` : ""}
+                        ${member2 ? `
+                          <div class="registration-player">
+                            ${avatar(member2) ? `<img class="registration-player-avatar" src="${escapeHtml(avatar(member2))}" alt="">` : `<div class="registration-player-avatar"></div>`}
+                            <div>
+                              <div class="registration-player-name">${escapeHtml(member2.full_name || "")}</div>
+                              <div class="registration-meta">📞 ${escapeHtml(member2.phone || "")}${member2.club ? " · " + escapeHtml(member2.club) : ""}</div>
+                              <div class="registration-meta">Trình ${formatRating(member2.rating)}</div>
+                            </div>
+                          </div>` : ""}
+                      </div>
+                    </div>
 
-              <th>Trạng thái</th>
+                    <div class="registration-rating-box">
+                      <div class="muted">Tổng trình</div>
+                      <div class="registration-rating-total">${formatRating(total)}</div>
+                      ${over ? `<div class="registration-rating-warning">🔴 Vượt trình tối đa ${formatRating(limit)}<br>BTC xem xét</div>` : ""}
+                      <div style="margin-top:6px;">Mã BT: <strong>${escapeHtml(reg.draw_code || reg.lottery_code || "—")}</strong></div>
+                    </div>
 
-            </tr>
+                    <div>
+                      <div><strong>Mã đăng ký:</strong> ${escapeHtml(String(reg.id))}</div>
+                      <div style="margin-top:4px;">${paymentStatusBadge(reg.payment_status)}</div>
+                      <div class="registration-meta">${reg.created_at || reg.registered_at ? "🕒 " + formatDate(reg.created_at || reg.registered_at) : ""}</div>
 
-          </thead>
+                      <div class="row-actions" style="margin-top:8px;">
+                        <button class="btn" style="padding:6px 9px;" onclick="openPaymentModal('${reg.id}')">💳 Đã nộp phí</button>
+                        ${isAdmin() && reg.payment_proof_path ? `<button class="btn" style="padding:6px 9px;" onclick="viewPaymentProof('${reg.id}')">📎 Chứng từ</button>` : ""}
+                        ${isAdmin() && canManageTournament(tournament) && String(reg.payment_status || "unpaid") !== "paid_confirmed" ? `<button class="btn primary" style="padding:6px 9px;" onclick="confirmRegistrationPayment('${reg.id}','cash',true)">💵 Xác nhận</button>` : ""}
+                        ${isAdmin() && canManageTournament(tournament) && String(reg.payment_status || "unpaid") === "proof_submitted" ? `<button class="btn danger" style="padding:6px 9px;" onclick="confirmRegistrationPayment('${reg.id}','transfer',false)">Từ chối</button>` : ""}
+                      </div>
+                    </div>
 
-
-          <tbody>
-
-            ${
-              tournamentRegistrations
-                .map((reg, index) => {
-
-                  const member1 =
-                    members.find(m =>
-                      String(m.id) ===
-                      String(reg.member_id)
-                    );
-
-
-                  const member2 =
-                    members.find(m =>
-                      String(m.id) ===
-                      String(reg.member2_id)
-                    );
-
-
-                  let ratingText = "—";
-                  let ratingWarning = "";
-
-                  if (member1 && member2) {
-                    const r1 = Number(member1.rating || 1);
-                    const r2 = Number(member2.rating || 1);
-                    const total = r1 + r2;
-                    ratingText = formatRating(total);
-                    if(Number.isFinite(Number(tournament.rating_limit)) && total > Number(tournament.rating_limit)){
-                      ratingWarning = `<div style="color:#d00;font-weight:800;margin-top:5px;">🔴 Vượt điểm trình tối đa của giải – cần xem xét</div>`;
-                    }
-                  } else if (member1) {
-                    const total = Number(member1.rating || 1);
-                    ratingText = formatRating(total);
-                    if(Number.isFinite(Number(tournament.rating_limit)) && total > Number(tournament.rating_limit)){
-                      ratingWarning = `<div style="color:#d00;font-weight:800;margin-top:5px;">🔴 Vượt điểm trình tối đa của giải – cần xem xét</div>`;
-                    }
-                  }
-
-                  return `
-
-                    <tr>
-
-                      <td>
-                        ${index + 1}
-                      </td>
-
-
-                      <td>
-
-                        <strong>
-                          ${escapeHtml(
-                            getTeamDisplayName(reg)
-                          )}
-                        </strong>
-                        ${member1 ? `<div class="muted">📞 ${escapeHtml(member1.phone || "")} ${member1.club ? " · " + escapeHtml(member1.club) : ""}</div>` : ""}
-                        ${member2 ? `<div class="muted">📞 ${escapeHtml(member2.phone || "")} ${member2.club ? " · " + escapeHtml(member2.club) : ""}</div>` : ""}
-
-
-                        ${
-                          tournament.competition_type ===
-                          "doubles" &&
-                          member1 &&
-                          member2
-                            ? `
-                              <div class="muted">
-                                ${escapeHtml(
-                                  member1.full_name
-                                )}
-                                &amp;
-                                ${escapeHtml(
-                                  member2.full_name
-                                )}
-                              </div>
-                            `
-                            : ""
-                        }
-
-                      </td>
-
-
-                      <td>
-                        <strong>${ratingText}</strong>
-                        ${ratingWarning}
-                      </td>
-
-
-                      <td>
-                        <div><strong>Đăng ký:</strong> ${escapeHtml(reg.status || "registered")}</div>
-                        ${reg.created_at || reg.registered_at ? `<div class="muted">🕒 ${formatDate(reg.created_at || reg.registered_at)}</div>` : ""}
-                        <div style="margin-top:5px;">${paymentStatusBadge(reg.payment_status)}</div>
-                        <div class="row-actions" style="margin-top:6px;">
-                          <button class="btn" style="padding:5px 8px;" onclick="openPaymentModal('${reg.id}')">💳 Đã nộp phí</button>
-                          ${isAdmin() && reg.payment_proof_path ? `<button class="btn" style="padding:5px 8px;" onclick="viewPaymentProof('${reg.id}')">📎 Xem ảnh</button>` : ""}
-                          ${isAdmin() && canManageTournament(tournament) && String(reg.payment_status || "unpaid") !== "paid_confirmed" ? `<button class="btn primary" style="padding:5px 8px;" onclick="confirmRegistrationPayment('${reg.id}','cash',true)">💵 Xác nhận tiền mặt</button>` : ""}
-                          ${isAdmin() && canManageTournament(tournament) && String(reg.payment_status || "unpaid") === "proof_submitted" ? `<button class="btn danger" style="padding:5px 8px;" onclick="confirmRegistrationPayment('${reg.id}','transfer',false)">Từ chối</button>` : ""}
-                        </div>
-                      </td>
-
-                    </tr>
-
-                  `;
-
-                })
-                .join("")
-            }
-
-          </tbody>
-
-        </table>
-
+                  </div>
+                </div>
+              `;
+            })
+            .join("")
+        }
       </div>
 
     `;
@@ -7127,7 +7223,7 @@ async function renderTournamentPanel() {
         ${escapeHtml(getMatchSideName(nextMatch.team_b))}
       </div>
       <div class="muted" style="margin-top:4px;">
-        ${escapeHtml(nextMatch.round_name || "Vòng đấu")} · Trận ${escapeHtml(String(nextMatch.match_no || ""))}
+        ${escapeHtml(publicRoundLabel(nextMatch.round_name))} · Trận ${escapeHtml(String(nextMatch.match_no || ""))}
         · Đánh đến ${Number(nextMatch.target_score || 11)} điểm
       </div>
       <div class="row-actions" style="margin-top:8px;">
@@ -7223,10 +7319,7 @@ async function renderTournamentPanel() {
                     <div>
 
                       <strong>
-                        ${escapeHtml(
-                          match.round_name ||
-                          "Vòng đấu"
-                        )}
+                        ${escapeHtml(publicRoundLabel(match.round_name))}
                       </strong>
 
                       ${
@@ -8480,155 +8573,130 @@ function openRegistrationModal(tournamentId) {
     return;
   }
 
-  const isDoubles =
-    tournament.competition_type === "doubles";
+  const isDoubles = tournament.competition_type === "doubles";
+  currentTournamentId = tournament.id;
+  const currentCount = registrationsForTournament(tournament.id)
+    .filter(r => String(r.status || "registered") !== "cancelled").length;
+  const maxTeams = Number(tournament.max_teams || 0);
+  const remaining = maxTeams > 0 ? Math.max(0, maxTeams - currentCount) : null;
 
   openModal(`
-
     <div class="modal-head">
-
       <div>
-        <h3>
-          ${isDoubles ? "Đăng ký đôi" : "Đăng ký đơn"}
-        </h3>
+        <h3>${isDoubles ? "🏆 Đăng ký đội đôi" : "🏆 Đăng ký thi đấu đơn"}</h3>
+        <div class="muted">${escapeHtml(tournament.name || "Giải đấu")}</div>
+      </div>
+      <button class="icon-btn" onclick="closeModal()">✕</button>
+    </div>
 
-        <div class="muted">
-          ${
-            isDoubles
-              ? "Nhập số điện thoại của 2 thành viên."
-              : "Nhập số điện thoại của thành viên."
-          }
+    <div class="registration-hero">
+      <div class="registration-stat">
+        <span>Thể thức</span>
+        <strong>${escapeHtml(tournamentFormatText(tournament.format))}</strong>
+      </div>
+      <div class="registration-stat">
+        <span>Giới hạn trình</span>
+        <strong>${Number.isFinite(Number(tournament.rating_limit)) ? formatRating(tournament.rating_limit) : "Không giới hạn"}</strong>
+      </div>
+      <div class="registration-stat success">
+        <span>Đã đăng ký</span>
+        <strong>${currentCount}${maxTeams ? " / " + maxTeams : ""}</strong>
+      </div>
+      <div class="registration-stat neutral">
+        <span>Còn chỗ</span>
+        <strong>${remaining === null ? "∞" : remaining}</strong>
+      </div>
+    </div>
+
+    <div class="notice">
+      <strong>📌 Cách đăng ký</strong><br>
+      Nhập số điện thoại để hệ thống tự tìm thành viên và lấy trình hiện tại.
+      ${isDoubles ? " Đánh đôi gồm 2 thành viên." : ""}
+      <br>
+      <span class="muted">🔴 Nếu tổng trình vượt giới hạn của giải, vẫn được đăng ký nhưng hệ thống sẽ cảnh báo để Ban tổ chức xem xét.</span>
+    </div>
+
+    <div class="form-group">
+      <label>Số điện thoại thành viên 1 *</label>
+      <input id="regPhone1" type="tel" inputmode="numeric" autocomplete="off"
+        placeholder="Nhập số điện thoại..."
+        oninput="lookupRegistrationMember(1); updateRegistrationPreview()" />
+      <div id="regMemberResult1" class="member-search-result">
+        Nhập số điện thoại để tìm thành viên.
+      </div>
+    </div>
+
+    ${isDoubles ? `
+      <div class="form-group">
+        <label>Số điện thoại thành viên 2 *</label>
+        <input id="regPhone2" type="tel" inputmode="numeric" autocomplete="off"
+          placeholder="Nhập số điện thoại..."
+          oninput="lookupRegistrationMember(2); updateRegistrationPreview()" />
+        <div id="regMemberResult2" class="member-search-result">
+          Nhập số điện thoại để tìm thành viên.
         </div>
       </div>
 
-      <button
-        class="icon-btn"
-        onclick="closeModal()">
-        ✕
-      </button>
-
-    </div>
-
-
-    <div class="notice">
-
-      ${
-        isDoubles
-          ? `
-            <strong>Đăng ký đội đôi</strong><br>
-            Mỗi thành viên chỉ được đăng ký một đội
-            trong cùng một giải.
-          `
-          : `
-            <strong>Đăng ký thi đấu đơn</strong><br>
-            Nhập số điện thoại để tìm thành viên.
-          `
-      }
-
-    </div>
-
-
-    <!-- THÀNH VIÊN 1 -->
-
-    <div class="form-group">
-
-      <label>
-        Số điện thoại thành viên 1 *
-      </label>
-
-      <input
-        id="regPhone1"
-        type="tel"
-        inputmode="numeric"
-        autocomplete="off"
-        placeholder="Nhập số điện thoại..."
-        oninput="lookupRegistrationMember(1)"
-      />
-
-      <div
-        id="regMemberResult1"
-        class="member-search-result">
-        Nhập số điện thoại để tìm thành viên.
+      <div class="form-group">
+        <label>Tên đội <span class="muted">(không bắt buộc)</span></label>
+        <input id="regTeamName" type="text" placeholder="Ví dụ: Lào Cai Pickleball 01" />
       </div>
+    ` : ""}
 
-    </div>
+    <div id="registrationPreview" class="notice" style="display:none;"></div>
 
-
-    ${
-      isDoubles
-        ? `
-
-          <!-- THÀNH VIÊN 2 -->
-
-          <div class="form-group">
-
-            <label>
-              Số điện thoại thành viên 2 *
-            </label>
-
-            <input
-              id="regPhone2"
-              type="tel"
-              inputmode="numeric"
-              autocomplete="off"
-              placeholder="Nhập số điện thoại..."
-              oninput="lookupRegistrationMember(2)"
-            />
-
-            <div
-              id="regMemberResult2"
-              class="member-search-result">
-              Nhập số điện thoại để tìm thành viên.
-            </div>
-
-          </div>
-
-
-          <div class="form-group">
-
-            <label>
-              Tên đội
-            </label>
-
-            <input
-              id="regTeamName"
-              type="text"
-              placeholder="Ví dụ: Lào Cai Pickleball 01"
-            />
-
-          </div>
-
-        `
-        : ""
-    }
-
-
-    <div
-      id="registrationError"
-      class="error-box"
-      style="display:none;">
-    </div>
-
+    <div id="registrationError" class="error-box" style="display:none;"></div>
 
     <div class="row-actions">
-
-      <button
-        class="btn"
-        onclick="closeModal()">
-        Huỷ
-      </button>
-
-      <button
-        class="btn primary"
-        onclick="submitRegistration('${tournament.id}')">
+      <button class="btn" onclick="closeModal()">Huỷ</button>
+      <button class="btn primary" onclick="submitRegistration('${tournament.id}')">
         ✓ Xác nhận đăng ký
       </button>
-
     </div>
-
   `);
 
+  updateRegistrationPreview();
 }
+
+function updateRegistrationPreview(){
+
+  const tournament = tournamentById(
+    currentTournamentId ||
+    document.querySelector("[onclick*='submitRegistration']")?.getAttribute("onclick")?.match(/submitRegistration\('([^']+)'/)?.[1]
+  );
+
+  const box = document.getElementById("registrationPreview");
+  if(!box || !tournament) return;
+
+  const m1 = findMemberByPhone(
+    document.getElementById("regPhone1")?.value || ""
+  );
+  const m2 = findMemberByPhone(
+    document.getElementById("regPhone2")?.value || ""
+  );
+
+  if(!m1 && !m2){
+    box.style.display = "none";
+    return;
+  }
+
+  const total = tournament.competition_type === "doubles"
+    ? Number(m1?.rating || 1) + Number(m2?.rating || 1)
+    : Number(m1?.rating || 1);
+
+  const limit = Number(tournament.rating_limit);
+  const over = Number.isFinite(limit) && total > limit;
+
+  box.style.display = "block";
+  box.innerHTML = `
+    <strong>👥 Kiểm tra trước khi gửi</strong><br>
+    ${m1 ? `VĐV 1: <b>${escapeHtml(m1.full_name || "")}</b> · Trình ${formatRating(m1.rating)}` : "VĐV 1: chưa xác định"}
+    ${tournament.competition_type === "doubles" ? `<br>${m2 ? `VĐV 2: <b>${escapeHtml(m2.full_name || "")}</b> · Trình ${formatRating(m2.rating)}` : "VĐV 2: chưa xác định"}` : ""}
+    <br><strong>Tổng trình: ${formatRating(total)}</strong>
+    ${over ? `<br><span style="color:#d00000;font-weight:900;">🔴 Vượt giới hạn trình ${formatRating(limit)} — vẫn được đăng ký để BTC xem xét.</span>` : ""}
+  `;
+}
+
 /* =========================================================
    TÌM THÀNH VIÊN BẰNG SỐ ĐIỆN THOẠI
 ========================================================= */
@@ -10946,6 +11014,41 @@ async function loadTournaments() {
    30. RENDER DANH SÁCH GIẢI ĐẤU
 ========================================================= */
 
+
+function publicRoundInfo(roundName){
+  const name = String(roundName || "").trim();
+
+  if (/grand\s*final\s*—\s*reset/i.test(name)) {
+    return { order: 1001, label: "Chung kết lại" };
+  }
+  if (/grand\s*final|chung\s*kết/i.test(name)) {
+    return { order: 1000, label: "Chung kết" };
+  }
+  if (/tứ\s*kết/i.test(name)) {
+    return { order: 900, label: "Tứ kết" };
+  }
+  if (/bán\s*kết/i.test(name)) {
+    return { order: 950, label: "Bán kết" };
+  }
+
+  const m = name.match(/Vòng\s+(\d+)/i);
+  if (m) {
+    const n = Number(m[1]);
+    const isLosers = /^Nhánh thua/i.test(name);
+    return {
+      order: isLosers ? n + 1 : n,
+      label: "Vòng " + (isLosers ? n + 1 : n)
+    };
+  }
+
+  if (/playoff/i.test(name)) return { order: 2, label: "Vòng 2" };
+  return { order: 500, label: name || "Vòng đấu" };
+}
+
+function publicRoundLabel(roundName){
+  return publicRoundInfo(roundName).label;
+}
+
 function tournamentFormatText(format) {
   if (format === "group_stage") return "Chia bảng";
   if (format === "double_elimination") return "Loại trực tiếp";
@@ -11220,16 +11323,8 @@ function renderResultMatches() {
   const selectedTournament = tournaments.find(t => String(t.id) === String(tournamentId));
 
   if (selectedTournament && selectedTournament.format === "double_elimination") {
-    const getDirectRoundInfo = (roundName) => {
-      const name = String(roundName || "");
-      if (/grand\s*final|chung\s*kết/i.test(name)) return { order: 1000, label: "Chung kết" };
-      if (/tứ\s*kết/i.test(name)) return { order: 900, label: "Tứ kết" };
-      if (/bán\s*kết/i.test(name)) return { order: 950, label: "Bán kết" };
-      const m = name.match(/Vòng\s+(\d+)/i);
-      if (m) { const n = Number(m[1]); return { order: n, label: "Vòng " + n }; }
-      if (/playoff/i.test(name)) return { order: 2, label: "Vòng 2" };
-      return { order: 500, label: "Vòng đấu" };
-    };
+    const getDirectRoundInfo = (roundName) =>
+      publicRoundInfo(roundName);
 
     const roundGroups = new Map();
     tournamentMatches.forEach(match => {
@@ -11299,7 +11394,7 @@ function renderResultMatches() {
 
           <div>
             <strong>
-              ${escapeHtml(match.round_name || "Vòng đấu")}
+              ${escapeHtml(publicRoundLabel(match.round_name))}
             </strong>
 
             ${
@@ -11731,7 +11826,7 @@ function openMatchResultModal(matchId) {
         <h3>Nhập kết quả trận đấu</h3>
 
         <div class="muted">
-          ${escapeHtml(match.round_name || "")}
+          ${escapeHtml(publicRoundLabel(match.round_name))}
         </div>
       </div>
 
@@ -12686,7 +12781,7 @@ async function insertScheduledMatch(
 }
 
 
-async function processByeMatches(tournamentId){
+async function processByeMatches(tournamentId, continueProgress = true){
 
   let changed = true;
 
@@ -12753,7 +12848,7 @@ async function processByeMatches(tournamentId){
 
   }
 
-  if(changed){
+  if(changed && continueProgress){
 
     await advanceDoubleEliminationProgress(
       tournamentId
@@ -13112,7 +13207,8 @@ async function ensureDoubleEliminationWinnersNextRound(tournamentId){
 }
 
 async function advanceDoubleEliminationProgress(
-  tournamentId
+  tournamentId,
+  shouldRender = true
 ){
 
   const tournament = tournamentById(tournamentId);
@@ -13633,7 +13729,9 @@ async function advanceDoubleEliminationProgress(
     tournamentId
   );
 
-  await renderTournamentPanel();
+  if(shouldRender){
+    await renderTournamentPanel();
+  }
 }
 
 /* =========================================================
