@@ -18,6 +18,75 @@
 
 
 <style>
+/* V16 — horizontal direct bracket */
+.direct-bracket-scroll{
+  width:100%;
+  overflow-x:auto;
+  overflow-y:hidden;
+  -webkit-overflow-scrolling:touch;
+  padding-bottom:10px;
+}
+.direct-bracket{
+  display:flex;
+  flex-direction:row;
+  align-items:flex-start;
+  gap:18px;
+  min-width:max-content;
+}
+.direct-bracket-column{
+  flex:0 0 245px;
+  width:245px;
+}
+.direct-bracket-column-title{
+  position:sticky;
+  top:0;
+  z-index:2;
+  text-align:center;
+  font-weight:900;
+  padding:10px 8px;
+  margin-bottom:12px;
+  border-radius:8px;
+  background:#f5e8ef;
+}
+.direct-bracket-column-matches{
+  display:flex;
+  flex-direction:column;
+  gap:18px;
+}
+.direct-bracket-match{
+  border:1px solid #e6bfd3;
+  border-radius:9px;
+  overflow:hidden;
+  background:#fff;
+  box-shadow:0 2px 6px rgba(0,0,0,.05);
+}
+.direct-bracket-match-head{
+  display:flex;
+  justify-content:space-between;
+  padding:7px 9px;
+  font-size:12px;
+  background:#faf5f8;
+}
+.direct-bracket-team{
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  padding:8px 9px;
+  border-top:1px solid #f0d7e2;
+}
+.direct-bracket-team.winner{
+  font-weight:800;
+  background:#e9f7ed;
+}
+.direct-bracket-team .direct-bracket-name{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.direct-bracket-status{font-size:11px;font-weight:800}
+.direct-bracket-result-btn{width:100%;border-radius:0!important}
+
 
 /* =========================================================
    PICKLEBALL LÀO CAI
@@ -1822,6 +1891,8 @@ th{
 }
 </style>
 
+
+<!-- V16 AUDIT: Direct bracket engine isolated; existing rating/permission modules preserved. -->
 </head>
 
 
@@ -7230,7 +7301,7 @@ async function renderTournamentPanel() {
 
   let scheduleHtml = "";
 
-  const nextMatch = tournamentMatches.find(m =>
+  const nextMatch = displayTournamentMatches.find(m =>
     m.status !== "completed" &&
     m.status !== "finished" &&
     m.team_a &&
@@ -15442,9 +15513,259 @@ function _cleanBuildRounds(tournamentId){
   return out;
 }
 
-function cleanDirectBracketMatches(tournamentId){
-  return _cleanBuildRounds(tournamentId);
+/*
+ * ============================================================
+ * V16 — DIRECT BRACKET VIEW ENGINE
+ * ============================================================
+ * Mục tiêu:
+ *   1. UI chỉ hiển thị Vòng 1, Vòng 2, Vòng 3...,
+ *      Tứ kết, Bán kết, Chung kết.
+ *   2. Không cần INSERT/UPDATE DB khi chỉ xem giải.
+ *   3. Nếu Vòng 1 đã hoàn thành nhưng DB chưa có Vòng 2,
+ *      Vòng 2 vẫn được dựng ngay trên giao diện.
+ *   4. Giữ nguyên trận thật đã có trong DB.
+ *   5. Trận ảo chỉ là VIEW; chỉ materialize khi admin nhập kết quả.
+ *
+ * Đây là VIEW ENGINE, không thay đổi rating hay dữ liệu thành viên.
+ * ============================================================
+ */
+
+function _v16PairKey(a,b){
+  const aa = String(a ?? "");
+  const bb = String(b ?? "");
+  return [aa,bb].sort().join("::");
 }
+
+function _v16Unique(ids){
+  const out=[];
+  for(const id of ids || []){
+    if(id===null || id===undefined || id==="") continue;
+    if(!out.some(x=>String(x)===String(id))) out.push(id);
+  }
+  return out;
+}
+
+function _v16Pairs(ids){
+  const clean=_v16Unique(ids);
+  const pairs=[];
+  for(let i=0;i<clean.length;i+=2){
+    pairs.push([clean[i], clean[i+1] ?? null]);
+  }
+  return pairs;
+}
+
+function _v16Completed(m){
+  return !!m && (
+    String(m.status||"").toLowerCase()==="completed" ||
+    String(m.status||"").toLowerCase()==="finished"
+  );
+}
+
+function _v16Winner(m){
+  if(!_v16Completed(m)) return null;
+  const a=Number(m.score_a), b=Number(m.score_b);
+  if(!Number.isFinite(a)||!Number.isFinite(b)) return null;
+  if(a===b) return null;
+  return a>b ? m.team_a : m.team_b;
+}
+
+function _v16Loser(m){
+  if(!_v16Completed(m)) return null;
+  const a=Number(m.score_a), b=Number(m.score_b);
+  if(!Number.isFinite(a)||!Number.isFinite(b)) return null;
+  if(a===b) return null;
+  return a>b ? m.team_b : m.team_a;
+}
+
+function _v16ActualRound(all,n){
+  return all
+    .filter(m => _finalDisplayRoundNumber(m.round_name)===n)
+    .sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0));
+}
+
+function _v16MakeVirtual(tournamentId,n,no,a,b,source,note){
+  return {
+    id:`virtual-v16-${tournamentId}-${n}-${no}`,
+    tournament_id:tournamentId,
+    round_name:`Vòng ${n}`,
+    match_no:no,
+    team_a:a ?? null,
+    team_b:b ?? null,
+    score_a:null,
+    score_b:b==null ? 0 : null,
+    status:b==null ? "completed" : "scheduled",
+    target_score:n===1 ? 11 : 15,
+    notes:note || "Trận dự kiến",
+    __virtual:true,
+    __source:source || "winner"
+  };
+}
+
+function _v16ExistingPairSet(rows){
+  const set=new Set();
+  for(const m of rows||[]){
+    if(m.team_a && m.team_b){
+      set.add(_v16PairKey(m.team_a,m.team_b));
+    }
+  }
+  return set;
+}
+
+function _v16AppendPairs(out,n,pairs,tournamentId){
+  const existing=_v16ExistingPairSet(
+    out.filter(m=>_finalDisplayRoundNumber(m.round_name)===n)
+  );
+  let no=out
+    .filter(m=>_finalDisplayRoundNumber(m.round_name)===n)
+    .reduce((max,m)=>Math.max(max,Number(m.match_no||0)),0)+1;
+
+  for(const pair of pairs){
+    const a=pair[0], b=pair[1] ?? null;
+    if(!a) continue;
+
+    const key=b ? _v16PairKey(a,b) : `BYE::${String(a)}`;
+    if(existing.has(key)) continue;
+
+    out.push(_v16MakeVirtual(
+      tournamentId,n,no++,a,b,
+      pair.source,
+      pair.note
+    ));
+    existing.add(key);
+  }
+}
+
+function _v16BuildDirectDisplay(tournamentId){
+  const actual=getTournamentMatches(tournamentId)
+    .filter(m=>m && (m.team_a || m.team_b));
+
+  const out=[...actual];
+
+  /*
+   * Tạo tuần tự tối đa 32 vòng hiển thị.
+   * Vòng 2 trở đi chỉ được dựng khi vòng trước đã hoàn thành.
+   */
+  for(let n=1;n<=32;n++){
+
+    const current=_v16ActualRound(out,n);
+
+    if(!current.length) break;
+
+    /*
+     * Nếu DB đã có các trận Vòng n nhưng vẫn còn trận chưa đấu,
+     * chưa được phép suy ra vòng tiếp theo.
+     */
+    if(!current.every(_v16Completed)) break;
+
+    const winners=_v16Unique(current.map(_v16Winner));
+    const losers=_v16Unique(current.map(_v16Loser));
+
+    if(n===1){
+
+      /*
+       * Vòng 2:
+       *   - thắng V1 gặp thắng V1
+       *   - thua V1 gặp thua V1
+       *
+       * BYE ở V1 không tạo "đội thua".
+       */
+      const pairs=[];
+
+      _v16Pairs(winners).forEach(pairs.push.bind(pairs));
+      _v16Pairs(losers).forEach(p=>{
+        pairs.push([p[0],p[1]]);
+      });
+
+      /*
+       * Gắn nguồn để chỉ phục vụ hiển thị.
+       * Hai nhóm được ghép độc lập.
+       */
+      const winnerPairs=_v16Pairs(winners).map(p=>({
+        pair:p, source:"winner",
+        note:"Đội thắng Vòng 1 gặp đội thắng Vòng 1"
+      }));
+      const loserPairs=_v16Pairs(losers).map(p=>({
+        pair:p, source:"loser",
+        note:"Đội thua Vòng 1 gặp đội thua Vòng 1"
+      }));
+
+      /*
+       * Nếu nhóm thua lẻ, đội cuối nhận BYE.
+       */
+      if(losers.length%2===1){
+        const last=losers[losers.length-1];
+        loserPairs.push({
+          pair:[last,null],
+          source:"loser",
+          note:"BYE từ nhóm đội thua Vòng 1"
+        });
+      }
+
+      _v16AppendPairs(
+        out,2,
+        winnerPairs.map(x=>({
+          0:x.pair[0],1:x.pair[1],
+          source:x.source,note:x.note
+        })),
+        tournamentId
+      );
+
+      _v16AppendPairs(
+        out,2,
+        loserPairs.map(x=>({
+          0:x.pair[0],1:x.pair[1],
+          source:x.source,note:x.note
+        })),
+        tournamentId
+      );
+
+      continue;
+    }
+
+    /*
+     * Vòng 3+:
+     * Tất cả đội thắng ở vòng hiển thị trước tiếp tục.
+     * Những đội thua ở Vòng 2 đã nhận thêm một lần thua;
+     * đội đã có đủ 2 lần thua không được đưa tiếp.
+     *
+     * Luồng này cố ý đơn giản ở VIEW: thắng gặp thắng.
+     * Việc materialize trận thật vẫn do quyền quản trị kiểm soát.
+     */
+    if(winners.length<=1) break;
+
+    const pairs=_v16Pairs(winners).map(p=>({
+      pair:p,
+      source:"winner",
+      note:`Đội thắng Vòng ${n} gặp đội thắng Vòng ${n}`
+    }));
+
+    _v16AppendPairs(
+      out,n+1,
+      pairs.map(x=>({
+        0:x.pair[0],1:x.pair[1],
+        source:x.source,note:x.note
+      })),
+      tournamentId
+    );
+  }
+
+  /*
+   * Các trận thật đặc biệt:
+   * nếu DB đã có Tứ kết/Bán kết/Chung kết thì giữ nguyên.
+   * publicRoundInfo() quyết định vị trí hiển thị.
+   */
+  return out;
+}
+
+/*
+ * Đây là hàm DUY NHẤT mà renderer gọi để lấy bracket trực tiếp.
+ * Không gọi engine ghi DB.
+ */
+function cleanDirectBracketMatches(tournamentId){
+  return _v16BuildDirectDisplay(tournamentId);
+}
+
+
 
 async function _finalSyncDoubleElimination(tournamentId){
   /*
