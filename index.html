@@ -10320,9 +10320,11 @@ async function renderCompetitionStructure(
     nhưng giao diện chỉ hiển thị Vòng 1, Vòng 2, Vòng 3...
   */
 
-  await processByeMatches(tournamentId, false);
-  await advanceDoubleEliminationProgress(tournamentId, false);
-
+  /*
+   * Render chỉ đọc dữ liệu. Không INSERT/UPDATE matches khi người dùng
+   * đang mở màn hình. Các vòng chưa materialize sẽ được dựng ảo từ
+   * kết quả đã có; quản trị chỉ ghi DB khi thực sự nhập kết quả.
+   */
   const directMatches =
     buildDisplayDoubleEliminationMatches(tournamentId);
 
@@ -15278,140 +15280,234 @@ function _finalCompletedAll(rows){
     rows.every(matchCompleted);
 }
 
+function _finalDisplayRoundNumber(name){
+  const m = String(name || "").match(/Vòng\s+(\d+)/i);
+  if(m) return Number(m[1]);
+  const info = publicRoundInfo(name);
+  return Number(info.order || 0);
+}
+
+function _finalDisplayRoundMatches(all, n){
+  return all
+    .filter(m => _finalDisplayRoundNumber(m.round_name) === n)
+    .sort((a,b) =>
+      Number(a.match_no || 0) - Number(b.match_no || 0)
+    );
+}
+
+function _finalCompletedAll(rows){
+  return rows.length > 0 && rows.every(matchCompleted);
+}
+
+function _finalMakeDisplayMatch(
+  tournamentId,
+  n,
+  matchNo,
+  teamA,
+  teamB,
+  note
+){
+  return {
+    id: `virtual-de-${tournamentId}-${n}-${matchNo}`,
+    tournament_id: tournamentId,
+    round_name: `Vòng ${n}`,
+    match_no: matchNo,
+    team_a: teamA || null,
+    team_b: teamB || null,
+    score_a: null,
+    score_b: teamB ? null : 0,
+    status: teamB ? "scheduled" : "completed",
+    target_score: n === 1 ? 11 : 15,
+    notes: note || "Trận dự kiến",
+    __virtual: true
+  };
+}
+
+/*
+ * Double Elimination hiển thị theo "các vòng" thay vì tách Nhánh thắng/
+ * Nhánh thua. Quy tắc hiển thị:
+ *
+ * Vòng 1:
+ *   - các đội thắng V1 ghép với nhau ở V2
+ *   - các đội thua V1 ghép với nhau ở V2
+ *
+ * Từ V2 trở đi:
+ *   - các đội thắng của vòng trước tiếp tục ghép với nhau.
+ *
+ * Metadata về nguồn trận không được render ra giao diện.
+ *
+ * Đây là lớp VIEW: không ghi database. Khi quản trị bấm nhập kết quả
+ * một trận ảo, materializeVirtualDirectMatch() mới tạo row thật.
+ */
 function _finalBuildVirtualDE(tournamentId, actual){
-  const result=[...actual];
+  const result = [...actual];
 
-  const hasRound=(name)=>
-    actual.some(m => String(m.round_name || "") === name) ||
-    result.some(m => String(m.round_name || "") === name);
+  const existingDisplayRounds = new Set(
+    actual
+      .map(m => _finalDisplayRoundNumber(m.round_name))
+      .filter(n => Number.isFinite(n) && n > 0)
+  );
 
-  // Không tạo ảo nếu vòng thật đã tồn tại.
-  // Vòng 1 luôn lấy từ DB.
-  for(let n=1;n<=32;n++){
+  const getRound = n => _finalDisplayRoundMatches(result, n);
 
-    const wbName=`Nhánh thắng — Vòng ${n}`;
-    const wb=_finalRoundMatches(actual,"Nhánh thắng",n);
+  /* Nếu DB còn dùng tên "Nhánh thắng/nhánh thua", các trận vẫn được
+     gom vào đúng cột Vòng n. Không để lộ tên nội bộ. */
 
-    if(wb.length && _finalCompletedAll(wb)){
+  for(let n = 1; n <= 32; n++){
 
-      const winners=_finalUniqueIds(
-        wb.map(matchWinnerId)
+    const current = getRound(n);
+
+    if(!current.length) continue;
+
+    if(!_finalCompletedAll(current)) break;
+
+    if(n === 1){
+
+      const winners = _finalUniqueIds(
+        current.map(matchWinnerId)
       );
 
-      const nextWB=`Nhánh thắng — Vòng ${n+1}`;
-
-      if(winners.length>1 && !hasRound(nextWB)){
-        _finalPairIds(winners).forEach((pair,i)=>{
-          result.push(
-            _finalVirtualMatch(
-              tournamentId,
-              nextWB,
-              i+1,
-              pair[0],
-              pair[1],
-              n===1 ? 15 : 15,
-              `Dự kiến: đội thắng Vòng ${n} gặp nhau`
-            )
-          );
-        });
-      }
+      const losers = _finalUniqueIds(
+        current.map(matchLoserId)
+      );
 
       /*
-       * Sau Vòng 1: đội thua lần đầu gặp nhau.
-       * Nếu số lẻ thì đội cuối nhận BYE.
+       * Chỉ dựng Vòng 2 nếu DB chưa có Vòng 2.
+       * Hai luồng của V1 được ghép thành các cặp trong cùng một cột.
        */
-      if(n===1){
-        const losers=_finalUniqueIds(
-          wb.map(matchLoserId)
+      {
+        const pairs = [];
+
+        _finalPairIds(winners).forEach(pair =>
+          pairs.push({
+            a: pair[0],
+            b: pair[1],
+            note: "Dự kiến: đội thắng Vòng 1 gặp đội thắng Vòng 1"
+          })
         );
 
-        const lb1=`Nhánh thua — Vòng 1`;
+        _finalPairIds(losers).forEach(pair =>
+          pairs.push({
+            a: pair[0],
+            b: pair[1],
+            note: "Dự kiến: đội thua Vòng 1 gặp đội thua Vòng 1"
+          })
+        );
 
-        if(losers.length && !hasRound(lb1)){
-          _finalPairIds(losers).forEach((pair,i)=>{
+        /*
+         * Nếu luồng thua có số đội lẻ, đội cuối nhận BYE.
+         * Nếu toàn bộ danh sách không đủ cặp, không bịa thêm đội.
+         */
+        if(losers.length % 2 === 1){
+          const last = losers[losers.length - 1];
+
+          const alreadyUsed = pairs.some(p =>
+            String(p.a) === String(last) ||
+            String(p.b) === String(last)
+          );
+
+          if(!alreadyUsed){
+            pairs.push({
+              a: last,
+              b: null,
+              note: "Dự kiến BYE từ luồng thua Vòng 1"
+            });
+          }
+        }
+
+        /*
+         * Nếu winner/loser pairing đã dùng đủ các đội thì tạo.
+         * Không tạo cột rỗng.
+         */
+        pairs.forEach((pair, index) => {
+
+          const alreadyExists = result.some(m =>
+            _finalDisplayRoundNumber(m.round_name) === 2 &&
+            (
+              (
+                String(m.team_a || "") === String(pair.a || "") &&
+                String(m.team_b || "") === String(pair.b || "")
+              ) ||
+              (
+                String(m.team_a || "") === String(pair.b || "") &&
+                String(m.team_b || "") === String(pair.a || "")
+              )
+            )
+          );
+
+          if(!alreadyExists){
             result.push(
-              _finalVirtualMatch(
+              _finalMakeDisplayMatch(
                 tournamentId,
-                lb1,
-                i+1,
-                pair[0],
-                pair[1],
-                15,
-                `Dự kiến: đội thua Vòng 1 gặp nhau`
+                2,
+                index + 1,
+                pair.a,
+                pair.b,
+                pair.note
               )
             );
-          });
+          }
+        });
+
+        if(pairs.length){
+          existingDisplayRounds.add(2);
         }
       }
+
+      continue;
     }
 
     /*
-     * LB(n): winner LB(n-1) + loser WB(n).
-     * Chỉ dựng khi cả hai nguồn đã hoàn thành thật.
+     * Từ Vòng 2 trở đi: tất cả đội thắng vòng trước tiếp tục.
+     * Đội thua vòng trước đã nhận đủ 2 lần thua và bị loại.
      */
-    if(n>=2){
+    const nextN = n + 1;
 
-      const prevLBName=`Nhánh thua — Vòng ${n-1}`;
-      const prevLB=_finalRoundMatches(
-        actual,
-        "Nhánh thua",
-        n-1
+    const winners = _finalUniqueIds(
+      current.map(matchWinnerId)
+    );
+
+    if(winners.length <= 1) continue;
+
+    const pairs = _finalPairIds(winners);
+
+    pairs.forEach((pair, index) => {
+
+      const alreadyExists = result.some(m =>
+        _finalDisplayRoundNumber(m.round_name) === nextN &&
+        (
+          (
+            String(m.team_a || "") === String(pair[0] || "") &&
+            String(m.team_b || "") === String(pair[1] || "")
+          ) ||
+          (
+            String(m.team_a || "") === String(pair[1] || "") &&
+            String(m.team_b || "") === String(pair[0] || "")
+          )
+        )
       );
 
-      const currentWB=_finalRoundMatches(
-        actual,
-        "Nhánh thắng",
-        n
-      );
-
-      if(
-        _finalCompletedAll(prevLB) &&
-        _finalCompletedAll(currentWB)
-      ){
-
-        const lbWinners=_finalUniqueIds(
-          prevLB.map(matchWinnerId)
+      if(!alreadyExists){
+        result.push(
+          _finalMakeDisplayMatch(
+            tournamentId,
+            nextN,
+            index + 1,
+            pair[0],
+            pair[1],
+            `Dự kiến: đội thắng Vòng ${n} gặp nhau`
+          )
         );
-
-        const wbLosers=_finalUniqueIds(
-          currentWB.map(matchLoserId)
-        );
-
-        const entrants=[];
-        const max=Math.max(
-          lbWinners.length,
-          wbLosers.length
-        );
-
-        for(let i=0;i<max;i++){
-          if(lbWinners[i]) entrants.push(lbWinners[i]);
-          if(wbLosers[i]) entrants.push(wbLosers[i]);
-        }
-
-        const lbName=`Nhánh thua — Vòng ${n}`;
-
-        if(entrants.length && !hasRound(lbName)){
-          _finalPairIds(entrants).forEach((pair,i)=>{
-            result.push(
-              _finalVirtualMatch(
-                tournamentId,
-                lbName,
-                i+1,
-                pair[0],
-                pair[1],
-                15,
-                `Dự kiến: luồng thua Vòng ${n}`
-              )
-            );
-          });
-        }
       }
+    });
+
+    if(pairs.length){
+      existingDisplayRounds.add(nextN);
     }
   }
 
   return result;
 }
-
 
 async function materializeVirtualDirectMatch(
   tournamentId,
