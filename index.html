@@ -10346,7 +10346,7 @@ async function renderCompetitionStructure(
   area.innerHTML = `
 
     <h3>
-      🏆 Lịch thi đấu loại trực tiếp
+      🏆 Sơ đồ loại trực tiếp
     </h3>
 
     <div class="notice">
@@ -15555,10 +15555,20 @@ function _v16Pairs(ids){
 }
 
 function _v16Completed(m){
-  return !!m && (
-    String(m.status||"").toLowerCase()==="completed" ||
-    String(m.status||"").toLowerCase()==="finished"
-  );
+  if(!m) return false;
+
+  const status = String(m.status || "").toLowerCase();
+
+  // BYE được coi là hoàn thành về mặt bracket,
+  // nhưng tuyệt đối không phải là một trận thật để tính rating.
+  if(
+    (!m.team_b || String(m.notes || "").toLowerCase().includes("bye")) &&
+    m.team_a
+  ){
+    return true;
+  }
+
+  return status === "completed" || status === "finished";
 }
 
 function _v16Winner(m){
@@ -15584,6 +15594,7 @@ function _v16ActualRound(all,n){
 }
 
 function _v16MakeVirtual(tournamentId,n,no,a,b,source,note){
+  const isBye = !!a && !b;
   return {
     id:`virtual-v16-${tournamentId}-${n}-${no}`,
     tournament_id:tournamentId,
@@ -15591,11 +15602,11 @@ function _v16MakeVirtual(tournamentId,n,no,a,b,source,note){
     match_no:no,
     team_a:a ?? null,
     team_b:b ?? null,
-    score_a:null,
-    score_b:b==null ? 0 : null,
-    status:b==null ? "completed" : "scheduled",
+    score_a:isBye ? 11 : null,
+    score_b:isBye ? 0 : null,
+    status:isBye ? "completed" : "scheduled",
     target_score:n===1 ? 11 : 15,
-    notes:note || "Trận dự kiến",
+    notes:(note || "Trận dự kiến") + (isBye ? " — BYE, không tính rating" : ""),
     __virtual:true,
     __source:source || "winner"
   };
