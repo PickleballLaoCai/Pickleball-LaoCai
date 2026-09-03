@@ -1889,6 +1889,9 @@ th{
     gap:34px;
   }
 }
+
+.tournament-card[role="button"]{cursor:pointer;}
+.tournament-card[role="button"]:focus{outline:2px solid #0b6b43;outline-offset:2px;}
 </style>
 
 
@@ -7021,46 +7024,39 @@ function buildTeams(
    9. MỞ GIẢI
  ========================================================= */
 
-async function openTournament(
-  tournamentId
-){
+async function openTournament(tournamentId){
+  const tournament = tournaments.find(t =>
+    String(t.id) === String(tournamentId)
+  );
 
-  currentTournamentId =
-    tournamentId;
-
-
-  const select =
-    document.getElementById(
-      "activeTournament"
-    );
-
-
-  if(select){
-
-    select.value =
-      tournamentId;
-
+  if(!tournament){
+    showToast("Không tìm thấy giải đấu.");
+    return;
   }
 
+  // Xem giải là thao tác công khai: không kiểm tra quyền quản trị.
+  currentTournamentId = tournament.id;
 
-  await renderTournamentPanel();
+  const select = document.getElementById("activeTournament");
+  if(select){
+    select.value = String(tournament.id);
+  }
 
+  try{
+    await renderTournamentPanel();
+  }catch(error){
+    console.error("openTournament:", error);
+    showToast("Không thể mở giải: " + (error?.message || "Lỗi không xác định"));
+    return;
+  }
 
-  const panel =
-    document.getElementById(
-      "tournamentPanel"
-    );
-
-
+  const panel = document.getElementById("tournamentPanel");
   if(panel){
-
     panel.scrollIntoView({
       behavior:"smooth",
       block:"start"
     });
-
   }
-
 }
 
 
@@ -7534,7 +7530,15 @@ async function renderTournamentPanel() {
                     !isCompleted &&
                     match.team_a &&
                     match.team_b &&
-                    canManageMatch(match)
+                    (
+                      match.__virtual
+                        ? (
+                            isAdmin() &&
+                            hasAdminPermission("enter_results") &&
+                            canManageTournament(tournament)
+                          )
+                        : canManageMatch(match)
+                    )
                       ? `
 
                         <div
@@ -10912,7 +10916,11 @@ function renderTournaments() {
       ).length;
 
     return `
-      <div class="card tournament-card">
+      <div class="card tournament-card"
+           role="button"
+           tabindex="0"
+           onclick="openTournament('${t.id}')"
+           onkeydown="if(event.key==='Enter' || event.key===' '){event.preventDefault();openTournament('${t.id}');}">
 
         <div class="tournament-card-head">
 
@@ -10969,13 +10977,13 @@ function renderTournaments() {
 
           <button
             class="btn primary"
-            onclick="openTournament('${t.id}')">
-            Mở giải
+            onclick="event.stopPropagation();openTournament('${t.id}')">
+            👁️ Xem giải
           </button>
 
           <button
             class="btn"
-            onclick="openRegistrationModal('${t.id}')">
+            onclick="event.stopPropagation();openRegistrationModal('${t.id}')">
             Đăng ký
           </button>
 
@@ -14220,6 +14228,105 @@ async function respondRatingFeedback(id){
   await refreshApplication(); renderAdminPanel(); showToast("Đã gửi phản hồi của Hội đồng chấm trình.");
 }
 
+
+function _adminTournamentRowsHtml(){
+  const list=isSuperAdmin()
+    ? tournaments
+    : tournaments.filter(t=>String(t.created_by||"")===String(currentSession?.user?.id||""));
+
+  if(!list.length) return `<div class="empty">Chưa có giải đấu thuộc quyền quản lý.</div>`;
+
+  return `<div class="table-wrap"><table class="admin-table">
+    <thead><tr><th>Giải đấu</th><th>Thể thức</th><th>Đăng ký</th><th>Trận</th><th>Trạng thái</th><th>Thao tác</th></tr></thead>
+    <tbody>${list.map(t=>{
+      const regs=registrationsForTournament(t.id);
+      const ms=getTournamentMatches(t.id);
+      const canManage=canManageTournament(t);
+      return `<tr>
+        <td><b>${escapeHtml(t.name||"")}</b><br><span class="muted">${formatDate(t.event_date)}</span></td>
+        <td>${escapeHtml(tournamentFormatText(t.format))}</td>
+        <td>${regs.length}</td>
+        <td>${ms.length}</td>
+        <td>${escapeHtml(t.status||"")}</td>
+        <td><div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="btn btn-secondary" style="padding:6px 9px" onclick="adminSelectTournament('${t.id}')">👁️ Xem</button>
+          ${canManage&&hasAdminPermission("enter_results")?`<button class="btn btn-primary" style="padding:6px 9px" onclick="adminSelectTournament('${t.id}')">📝 Nhập KQ</button>`:""}
+        </div></td>
+      </tr>`;
+    }).join("")}</tbody>
+  </table></div>`;
+}
+
+function adminSelectTournament(tournamentId){
+  if(!isAdmin()){ showToast("Phiên quản trị không còn hiệu lực."); return; }
+  const t=tournamentById(tournamentId);
+  if(!t){ showToast("Không tìm thấy giải đấu."); return; }
+  if(!canManageTournament(t) && !isSuperAdmin()){
+    showToast("Bạn không có quyền quản lý giải này."); return;
+  }
+  currentTournamentId=t.id;
+  renderAdminTournamentManager(t.id);
+}
+
+function renderAdminTournamentManager(selectedId=null){
+  if(!isAdmin()){ openAdminPanel(); return; }
+  const selected=selectedId ? tournamentById(selectedId) : null;
+  const list=isSuperAdmin()
+    ? tournaments
+    : tournaments.filter(t=>String(t.created_by||"")===String(currentSession?.user?.id||""));
+
+  let selectedHtml="";
+  if(selected){
+    const tm=cleanDirectBracketMatches(selected.id);
+    const direct=selected.format==="double_elimination";
+    const grouped={};
+    tm.forEach(m=>{
+      const label=direct
+        ? publicRoundLabel(m.__displayLabel||m.round_name)
+        : publicRoundLabel(m.round_name);
+      (grouped[label] ||= []).push(m);
+    });
+    const canEnter=canManageTournament(selected)&&hasAdminPermission("enter_results");
+    selectedHtml=`<hr>
+      <div class="section-title">🏆 ${escapeHtml(selected.name||"Giải đấu")}</div>
+      <div class="chips"><span class="chip">${escapeHtml(tournamentFormatText(selected.format))}</span><span class="chip">${getTournamentMatches(selected.id).length} trận thật</span></div>
+      ${direct ? `<div class="bracket-scroll" style="overflow-x:auto;padding-bottom:8px"><div class="bracket-board" style="min-width:max-content;display:flex;gap:18px;align-items:flex-start">${Object.entries(grouped).map(([label,rows])=>`<div class="bracket-column" style="width:220px"><h5>${escapeHtml(label)}</h5>${rows.map(m=>`
+        <div class="match-card" style="margin-bottom:10px">
+          <div class="small muted">Trận ${Number(m.match_no||0)} · ${escapeHtml(m.status==="completed"?"Đã đấu":"Chưa đấu")}</div>
+          <div><b>${escapeHtml(teamDisplayName(m.team_a))}</b> <strong>${m.score_a??"—"}</strong></div>
+          <div><b>${escapeHtml(teamDisplayName(m.team_b)||"BYE")}</b> <strong>${m.score_b??"—"}</strong></div>
+          ${canEnter&&!m.__virtual&&m.team_b?`<button class="btn btn-primary" style="margin-top:6px;padding:6px 9px" onclick="openMatchResultModal('${m.id}')">📝 Nhập kết quả</button>`:""}
+          ${canEnter&&m.__virtual&&!m.team_b?`<span class="small muted">BYE</span>`:""}
+          ${canEnter&&m.__virtual&&m.team_b?`<button class="btn btn-primary" style="margin-top:6px;padding:6px 9px" onclick="materializeVirtualDirectMatch('${esc(selected.id)}','${esc(m.round_name)}',${Number(m.match_no||0)},'${esc(m.team_a)}','${esc(m.team_b)}')">📝 Tạo trận & nhập KQ</button>`:""}
+        </div>`).join("")}</div>`).join("")}</div></div>` :
+      `<div class="notice">Giải chia bảng: dùng lịch/bảng xếp hạng của giải để nhập kết quả.</div>`}`;
+  }
+
+  openModal("⚙️ Quản lý giải đấu",`<div class="admin-panel">
+    <div class="chips"><span class="admin-role">${escapeHtml(adminRoleText())}</span>${currentAdmin.club_name?`<span class="chip">CLB: ${escapeHtml(currentAdmin.club_name)}</span>`:""}</div>
+    <div class="actions">
+      <button class="btn btn-secondary" onclick="renderAdminPanel()">⚙️ Tổng quan quản trị</button>
+      <button class="btn btn-secondary" onclick="renderAdminRatingManager()">📊 Chấm trình</button>
+      <button class="btn btn-danger" onclick="adminLogout()">Đăng xuất</button>
+    </div>
+    <h4>🏆 Các giải đấu</h4>
+    ${_adminTournamentRowsHtml()}
+    ${selectedHtml}
+  </div>`);
+}
+
+function renderAdminRatingManager(){
+  if(!isAdmin()){ openAdminPanel(); return; }
+  renderAdminPanel();
+  setTimeout(()=>{
+    const body=document.getElementById("modalBody");
+    if(body){
+      const h=[...body.querySelectorAll("h4")].find(x=>x.textContent.includes("Đề xuất chấm trình"));
+      h?.scrollIntoView({block:"center"});
+    }
+  },0);
+}
+
 async function renderAdminPanel(){
   if(!isAdmin()){
     openAdminPanel();
@@ -14278,6 +14385,7 @@ async function renderAdminPanel(){
         <td>${escapeHtml(t.status || "")}</td>
         <td>
           <button class="btn btn-secondary" style="padding:6px 9px" onclick="openTournamentDetail('${t.id}')">Xem</button>
+          ${canDelete || (canManageTournament(t) && hasAdminPermission("enter_results")) ? `<button class="btn btn-primary" style="padding:6px 9px" onclick="adminSelectTournament('${t.id}')">📝 Quản lý & nhập KQ</button>` : ""}
           ${canDelete ? `<button class="btn btn-danger" style="padding:6px 9px" onclick="adminDeleteTournament('${t.id}')">Xoá</button>` : ""}
         </td>
       </tr>`;
@@ -14309,8 +14417,8 @@ async function renderAdminPanel(){
       </div>
 
       <div class="actions">
-        <button class="btn btn-secondary" onclick="go('tournaments');closeModal();">🏆 Quản lý giải</button>
-        <button class="btn btn-secondary" onclick="go('rating');closeModal();">📊 Chấm trình</button>
+        <button class="btn btn-secondary" onclick="renderAdminTournamentManager();">🏆 Quản lý giải</button>
+        <button class="btn btn-secondary" onclick="renderAdminRatingManager();">📊 Chấm trình</button>
         <button class="btn btn-danger" onclick="adminLogout()">Đăng xuất</button>
       </div>
 
@@ -15527,132 +15635,220 @@ function _v16AppendPairs(out,n,pairs,tournamentId){
   }
 }
 
-function _v16BuildDirectDisplay(tournamentId){
-  const actual=getTournamentMatches(tournamentId)
-    .filter(m=>m && (m.team_a || m.team_b));
+function _v21PairKey(a,b){
+  const aa=String(a ?? "");
+  const bb=String(b ?? "");
+  return [aa,bb].sort().join("::");
+}
 
-  const out=[...actual];
-
-  /*
-   * Tạo tuần tự tối đa 32 vòng hiển thị.
-   * Vòng 2 trở đi chỉ được dựng khi vòng trước đã hoàn thành.
-   */
-  for(let n=1;n<=32;n++){
-
-    const current=_v16ActualRound(out,n);
-
-    if(!current.length) break;
-
-    /*
-     * Nếu DB đã có các trận Vòng n nhưng vẫn còn trận chưa đấu,
-     * chưa được phép suy ra vòng tiếp theo.
-     */
-    if(!current.every(_v16Completed)) break;
-
-    const winners=_v16Unique(current.map(_v16Winner));
-    const losers=_v16Unique(current.map(_v16Loser));
-
-    if(n===1){
-
-      /*
-       * Vòng 2:
-       *   - thắng V1 gặp thắng V1
-       *   - thua V1 gặp thua V1
-       *
-       * BYE ở V1 không tạo "đội thua".
-       */
-      const pairs=[];
-
-      _v16Pairs(winners).forEach(pairs.push.bind(pairs));
-      _v16Pairs(losers).forEach(p=>{
-        pairs.push([p[0],p[1]]);
-      });
-
-      /*
-       * Gắn nguồn để chỉ phục vụ hiển thị.
-       * Hai nhóm được ghép độc lập.
-       */
-      const winnerPairs=_v16Pairs(winners).map(p=>({
-        pair:p, source:"winner",
-        note:"Đội thắng Vòng 1 gặp đội thắng Vòng 1"
-      }));
-      const loserPairs=_v16Pairs(losers).map(p=>({
-        pair:p, source:"loser",
-        note:"Đội thua Vòng 1 gặp đội thua Vòng 1"
-      }));
-
-      /*
-       * Nếu nhóm thua lẻ, đội cuối nhận BYE.
-       */
-      if(losers.length%2===1){
-        const last=losers[losers.length-1];
-        loserPairs.push({
-          pair:[last,null],
-          source:"loser",
-          note:"BYE từ nhóm đội thua Vòng 1"
-        });
-      }
-
-      _v16AppendPairs(
-        out,2,
-        winnerPairs.map(x=>({
-          0:x.pair[0],1:x.pair[1],
-          source:x.source,note:x.note
-        })),
-        tournamentId
-      );
-
-      _v16AppendPairs(
-        out,2,
-        loserPairs.map(x=>({
-          0:x.pair[0],1:x.pair[1],
-          source:x.source,note:x.note
-        })),
-        tournamentId
-      );
-
-      continue;
-    }
-
-    /*
-     * Vòng 3+:
-     * Tất cả đội thắng ở vòng hiển thị trước tiếp tục.
-     * Những đội thua ở Vòng 2 đã nhận thêm một lần thua;
-     * đội đã có đủ 2 lần thua không được đưa tiếp.
-     *
-     * Luồng này cố ý đơn giản ở VIEW: thắng gặp thắng.
-     * Việc materialize trận thật vẫn do quyền quản trị kiểm soát.
-     */
-    if(winners.length<=1) break;
-
-    const pairs=_v16Pairs(winners).map(p=>({
-      pair:p,
-      source:"winner",
-      note:`Đội thắng Vòng ${n} gặp đội thắng Vòng ${n}`
-    }));
-
-    _v16AppendPairs(
-      out,n+1,
-      pairs.map(x=>({
-        0:x.pair[0],1:x.pair[1],
-        source:x.source,note:x.note
-      })),
-      tournamentId
-    );
+function _v21Unique(ids){
+  const out=[];
+  for(const id of ids||[]){
+    if(id===null||id===undefined||id==="") continue;
+    if(!out.some(x=>String(x)===String(id))) out.push(id);
   }
-
-  /*
-   * Các trận thật đặc biệt:
-   * nếu DB đã có Tứ kết/Bán kết/Chung kết thì giữ nguyên.
-   * publicRoundInfo() quyết định vị trí hiển thị.
-   */
   return out;
 }
 
-/*
- * Đây là hàm DUY NHẤT mà renderer gọi để lấy bracket trực tiếp.
- * Không gọi engine ghi DB.
- */
+function _v21Completed(m){
+  if(!m) return false;
+  const bye=!m.team_b && m.team_a;
+  if(bye) return true;
+  const s=String(m.status||"").toLowerCase();
+  return s==="completed" || s==="finished";
+}
+
+function _v21Winner(m){
+  if(!_v21Completed(m)) return null;
+  const a=Number(m.score_a), b=Number(m.score_b);
+  if(!Number.isFinite(a)||!Number.isFinite(b)||a===b) return null;
+  return a>b ? m.team_a : m.team_b;
+}
+
+function _v21Loser(m){
+  if(!_v21Completed(m)) return null;
+  const a=Number(m.score_a), b=Number(m.score_b);
+  if(!Number.isFinite(a)||!Number.isFinite(b)||a===b) return null;
+  if(!m.team_b) return null;
+  return a>b ? m.team_b : m.team_a;
+}
+
+function _v21MakeVirtual(tournamentId, stage, no, a, b, source, note, label){
+  const bye=!!a && !b;
+  return {
+    id:`virtual-v21-${tournamentId}-${stage}-${no}`,
+    tournament_id:tournamentId,
+    round_name:label || `Vòng ${stage}`,
+    match_no:no,
+    team_a:a ?? null,
+    team_b:b ?? null,
+    score_a:bye ? (stage===1 ? 11 : 15) : null,
+    score_b:bye ? 0 : null,
+    status:bye ? "completed" : "scheduled",
+    target_score:stage===1 ? 11 : 15,
+    notes:(note||"Trận dự kiến") + (bye ? " — BYE, không tính rating" : ""),
+    __virtual:true,
+    __source:source
+  };
+}
+
+function _v21ChooseActual(actualRows, a, b){
+  const candidates=(actualRows||[]).filter(m=>{
+    if(a && b){
+      return !!m.team_a && !!m.team_b &&
+        _v21PairKey(m.team_a,m.team_b)===_v21PairKey(a,b);
+    }
+    return String(m.team_a??"")===String(a??"") && !m.team_b;
+  });
+  if(!candidates.length) return null;
+  candidates.sort((x,y)=>{
+    const xc=_v21Completed(x)?1:0, yc=_v21Completed(y)?1:0;
+    if(xc!==yc) return yc-xc;
+    return Number(x.match_no||0)-Number(y.match_no||0);
+  });
+  return candidates[0];
+}
+
+function _v21Pair(ids){
+  const clean=_v21Unique(ids), out=[];
+  for(let i=0;i<clean.length;i+=2) out.push([clean[i],clean[i+1]??null]);
+  return out;
+}
+
+function _v21AddExpected(out, actualRows, tournamentId, stage, label, pairs, source){
+  const rows=[];
+  let no=1;
+  for(const pair of pairs||[]){
+    const a=pair[0], b=pair[1]??null;
+    if(!a) continue;
+    const actual=_v21ChooseActual(actualRows,a,b);
+    if(actual){
+      rows.push({...actual,__source:source,__displayStage:stage,__displayLabel:label});
+    }else{
+      rows.push(_v21MakeVirtual(
+        tournamentId,stage,no,a,b,source,
+        source==="winner" ? `Đội thắng Vòng ${Math.max(1,stage-1)}` :
+        source==="loser" ? "Đội thua lần 1" : "Tự động",
+        label
+      ));
+    }
+    no++;
+  }
+  return rows;
+}
+
+function _v21BuildDirectDisplay(tournamentId){
+  const actualAll=getTournamentMatches(tournamentId)
+    .filter(m=>m && (m.team_a || m.team_b));
+
+  const result=[];
+  const actualByStage=n=>actualAll
+    .filter(m=>_finalDisplayRoundNumber(m.round_name)===n);
+
+  // VÒNG 1: giữ nguyên toàn bộ trận thật hiện có.
+  let stage1=actualByStage(1)
+    .sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0))
+    .map(m=>({...m,__source:"initial",__displayStage:1,__displayLabel:"Vòng 1"}));
+
+  if(!stage1.length) return result;
+  result.push(...stage1);
+
+  // Nếu Vòng 1 chưa xong thì chưa thể xác định Vòng 2.
+  if(!stage1.every(_v21Completed)) return result;
+
+  let wbWinners=_v21Unique(stage1.map(_v21Winner));
+  let lbEntrants=_v21Unique(stage1.map(_v21Loser));
+
+  // VÒNG 2: thắng gặp thắng + thua gặp thua.
+  let stage=2;
+  while(stage<=32){
+    const actualRows=actualByStage(stage);
+    const label=`Vòng ${stage}`;
+
+    const wbPairs=_v21Pair(wbWinners);
+    const lbPairs=_v21Pair(lbEntrants);
+
+    // Không còn trận Winners và Losers, chuyển sang chung kết.
+    if(stage>2 && wbWinners.length<=1 && lbEntrants.length<=1){
+      if(wbWinners.length===1 && lbEntrants.length===1){
+        const finalActual=_v21ChooseActual(actualByStage(99),wbWinners[0],lbEntrants[0]);
+        result.push(finalActual || _v21MakeVirtual(
+          tournamentId,99,1,wbWinners[0],lbEntrants[0],
+          "final","Chung kết","Chung kết"
+        ));
+      }
+      break;
+    }
+
+    const current=[
+      ..._v21AddExpected(result,actualRows,tournamentId,stage,label,wbPairs,"winner"),
+      ..._v21AddExpected(result,actualRows,tournamentId,stage,label,lbPairs,"loser")
+    ];
+
+    if(!current.length) break;
+
+    // Đảm bảo một đội không xuất hiện 2 lần trong cùng một vòng.
+    const used=new Set();
+    const canonical=[];
+    for(const m of current){
+      const ids=[m.team_a,m.team_b].filter(Boolean).map(String);
+      if(ids.some(id=>used.has(id))) continue;
+      ids.forEach(id=>used.add(id));
+      canonical.push(m);
+    }
+
+    // Xoá các bản Vòng hiện tại đã được thêm bởi _v21AddExpected ở trên
+    // và thay bằng danh sách canonical.
+    for(let i=result.length-1;i>=0;i--){
+      if(result[i].__displayStage===stage) result.splice(i,1);
+    }
+    result.push(...canonical);
+
+    // Nếu vòng hiện tại chưa xong, dừng; nhưng vẫn hiển thị toàn bộ trận
+    // đã xác định trong vòng này.
+    if(!canonical.every(_v21Completed)) break;
+
+    const nextWinners=[];
+    const nextLosersFromWB=[];
+    const nextLBWinners=[];
+
+    for(const m of canonical){
+      const w=_v21Winner(m), l=_v21Loser(m);
+      if(m.__source==="winner"){
+        if(w) nextWinners.push(w);
+        if(l) nextLosersFromWB.push(l);
+      }else if(m.__source==="loser"){
+        if(w) nextLBWinners.push(w);
+        // loser của LB bị loại, không đi tiếp.
+      }
+    }
+
+    wbWinners=_v21Unique(nextWinners);
+    lbEntrants=_v21Unique([...nextLosersFromWB,...nextLBWinners]);
+
+    // Nếu Winners đã còn 1 và LB cũng còn 1, dựng Chung kết.
+    if(wbWinners.length===1 && lbEntrants.length===1){
+      const finalActual=actualAll.find(m=>
+        /chung\s*kết|grand\s*final/i.test(String(m.round_name||"")) &&
+        _v21PairKey(m.team_a,m.team_b)===_v21PairKey(wbWinners[0],lbEntrants[0])
+      );
+      result.push(finalActual || _v21MakeVirtual(
+        tournamentId,99,1,wbWinners[0],lbEntrants[0],
+        "final","Chung kết","Chung kết"
+      ));
+      break;
+    }
+
+    stage++;
+  }
+
+  return result;
+}
+
+function cleanDirectBracketMatches(tournamentId){
+  return _v21BuildDirectDisplay(tournamentId);
+}
+
 function cleanDirectBracketMatches(tournamentId){
   return _v16BuildDirectDisplay(tournamentId);
 }
