@@ -1734,6 +1734,7 @@ th{
 .direct-bracket{
   display:flex;
   align-items:flex-start;
+  align-items:flex-start;
   gap:58px;
   min-width:max-content;
   padding:6px 4px 16px;
@@ -7039,35 +7040,6 @@ async function renderTournamentPanel() {
     return;
   }
 
-  /*
-   * Nếu Vòng 1 Double Elimination đã hoàn tất từ trước,
-   * vẫn phải tạo Vòng 2 khi người dùng mở lại giải.
-   * Không phụ thuộc việc vừa nhập kết quả trong phiên hiện tại.
-   */
-  if(
-    tournament.format ===
-    "double_elimination"
-  ){
-    try{
-      /*
-       * Khôi phục đúng trạng thái bracket khi mở lại giải:
-       * 1) BYE phải được hoàn tất trước;
-       * 2) sau đó mới tạo Vòng 2;
-       * 3) các vòng đã đủ kết quả tiếp tục được vật chất hoá.
-       * Không render lồng nhau trong bước này.
-       */
-      await processByeMatches(tournament.id, false);
-      await ensureDoubleEliminationStageTwo(tournament.id);
-      await advanceDoubleEliminationProgress(tournament.id, false);
-    }catch(error){
-      console.error(
-        "ensureDoubleEliminationStageTwo on render:",
-        error
-      );
-    }
-  }
-
-
   /* =====================================================
      DỮ LIỆU GIẢI
   ===================================================== */
@@ -7111,6 +7083,11 @@ async function renderTournamentPanel() {
 
       });
 
+
+  const displayTournamentMatches =
+    tournament.format === "double_elimination"
+      ? cleanDirectBracketMatches(tournament.id)
+      : tournamentMatches;
 
   const completedMatches =
     tournamentMatches.filter(m =>
@@ -7322,7 +7299,7 @@ async function renderTournamentPanel() {
       <div class="match-list">
 
         ${
-          tournamentMatches
+          displayTournamentMatches
             .map(match => {
 
               const sideA =
@@ -7475,9 +7452,7 @@ async function renderTournamentPanel() {
                         <div
                           class="muted"
                           style="margin-top:6px;">
-                          ${escapeHtml(
-                            match.notes
-                          )}
+                          ${tournament.format === "double_elimination" ? "" : escapeHtml(match.notes)}
                         </div>
                       `
                       : ""
@@ -7496,7 +7471,7 @@ async function renderTournamentPanel() {
 
                           <button
                             class="btn primary"
-                            onclick="openMatchResultModal('${match.id}')">
+                            onclick="${match.__virtual ? `materializeVirtualDirectMatch('${esc(tournament.id)}','${esc(match.round_name)}',${Number(match.match_no || 0)},'${esc(match.team_a)}','${esc(match.team_b)}')` : `openMatchResultModal('${match.id}')`}">
 
                             Nhập kết quả
 
@@ -7579,292 +7554,97 @@ async function renderTournamentPanel() {
 
 
   /* =====================================================
-     BRACKET LOẠI TRỰC TIẾP — SƠ ĐỒ
-     - Hiển thị dạng cột giống bracket trực quan.
-     - Không lộ nhãn "Nhánh thắng / Nhánh thua".
-     - Trận đã có kết quả vẫn giữ nguyên trên sơ đồ.
-     - Chỉ ẩn thông tin nội bộ của round_name, không xoá dữ liệu.
+     BRACKET LOẠI TRỰC TIẾP — VIEW SẠCH
+     - Chỉ hiển thị Vòng 1, Vòng 2, Vòng 3...
+     - Không render Nhánh thắng/Nhánh thua.
+     - Các vòng chưa có row thật được dựng ảo từ kết quả hiện có.
+     - Không ghi Supabase khi chỉ mở/xem giải.
   ===================================================== */
 
   let bracketHtml = "";
 
   if (tournament.format === "double_elimination") {
 
-    /*
-     * DOUBLE ELIMINATION — HIỂN THỊ THEO CỘT VÒNG
-     *
-     * Người dùng chỉ nhìn thấy:
-     * Vòng 1 → Vòng 2 → Vòng 3 → ... → Chung kết.
-     *
-     * Không hiển thị "Nhánh thắng / Nhánh thua".
-     * Dữ liệu nội bộ vẫn giữ hai nhánh để điều phối đúng.
-     *
-     * Quy ước:
-     * Vòng 1 = Winners Vòng 1
-     * Vòng 2 = Winners Vòng 2 + Losers Vòng 1
-     * Vòng 3 = Winners Vòng 3 + Losers Vòng 2
-     * ...
-     */
     const directMatches =
-      tournamentMatches
+      displayTournamentMatches
         .filter(m => m.team_a || m.team_b)
         .slice();
 
-    function visibleStage(match){
-
-      const name =
-        String(match.round_name || "");
-
-      if(
-        /grand\s*final|chung\s*kết/i.test(name)
-      ){
-        return 9999;
-      }
-
-      const m =
-        name.match(/Vòng\s+(\d+)/i);
-
-      if(!m) return 5000;
-
-      const n = Number(m[1]);
-
-      /*
-       * Losers Vòng N được đưa vào cột hiển thị Vòng N+1.
-       */
-      if(/^Nhánh thua/i.test(name)){
-        return n + 1;
-      }
-
-      return n;
-    }
-
-    function visibleStageLabel(stage){
-
-      if(stage === 9999){
-        return "Chung kết";
-      }
-
-      return "Vòng " + stage;
-    }
-
-    const stageMap = new Map();
+    const roundMap = new Map();
 
     directMatches.forEach(match => {
-
-      const stage =
-        visibleStage(match);
-
-      if(!stageMap.has(stage)){
-        stageMap.set(stage, []);
+      const info = publicRoundInfo(match.round_name);
+      const key = String(info.order);
+      if(!roundMap.has(key)){
+        roundMap.set(key, {
+          order: info.order,
+          label: info.label,
+          matches: []
+        });
       }
-
-      stageMap.get(stage).push(match);
-
+      roundMap.get(key).matches.push(match);
     });
 
-    function directBracketMatchHtml(match){
+    const directCard = match => {
+      const completed = matchCompleted(match);
+      const bye = !match.team_b ||
+        String(match.notes || "").toLowerCase().includes("bye");
+      const scoreA = match.score_a ?? "—";
+      const scoreB = match.score_b ?? (bye ? 0 : "—");
+      const winnerA = completed && Number(match.score_a) > Number(match.score_b);
+      const winnerB = completed && Number(match.score_b) > Number(match.score_a);
+      const virtual = !!match.__virtual;
 
-      const sideA =
-        getMatchSideName(match.team_a);
-
-      const sideB =
-        match.team_b
-          ? getMatchSideName(match.team_b)
-          : "BYE";
-
-      const completed =
-        match.status === "completed" ||
-        match.status === "finished";
-
-      const isBye =
-        !match.team_b ||
-        String(match.notes || "")
-          .toLowerCase()
-          .includes("bye");
-
-      const scoreA =
-        match.score_a !== null &&
-        match.score_a !== undefined
-          ? match.score_a
-          : "—";
-
-      const scoreB =
-        match.score_b !== null &&
-        match.score_b !== undefined
-          ? match.score_b
-          : (isBye ? "0" : "—");
-
-      const winnerA =
-        completed &&
-        Number(match.score_a) >
-        Number(match.score_b);
-
-      const winnerB =
-        completed &&
-        Number(match.score_b) >
-        Number(match.score_a);
+      let action = "";
+      if(!completed && match.team_a && match.team_b && canManageMatch(match)){
+        action = virtual
+          ? `<button class="btn primary direct-bracket-result-btn" onclick="materializeVirtualDirectMatch('${esc(tournament.id)}','${esc(match.round_name)}',${Number(match.match_no || 0)},'${esc(match.team_a)}','${esc(match.team_b)}')">Nhập kết quả</button>`
+          : `<button class="btn primary direct-bracket-result-btn" onclick="openMatchResultModal('${esc(match.id)}')">Nhập kết quả</button>`;
+      }
 
       return `
-        <div
-          class="direct-bracket-match
-            ${completed ? "is-completed" : ""}
-            ${isBye ? "is-bye" : ""}"
-        >
-
+        <div class="direct-bracket-match ${completed ? "is-completed" : ""} ${bye ? "is-bye" : ""}">
           <div class="direct-bracket-match-head">
-            <span>
-              Trận ${escapeHtml(
-                String(match.match_no || "")
-              )}
-            </span>
-
-            <span class="direct-bracket-status">
-              ${
-                isBye
-                  ? "BYE"
-                  : (
-                    completed
-                      ? "Đã đấu"
-                      : "Chưa đấu"
-                  )
-              }
-            </span>
+            <span>Trận ${escapeHtml(String(match.match_no || ""))}</span>
+            <span class="direct-bracket-status">${bye ? "BYE" : (completed ? "Đã đấu" : "Chưa đấu")}</span>
           </div>
-
-          <div
-            class="direct-bracket-team
-              ${winnerA ? "winner" : ""}"
-          >
-            <span class="direct-bracket-name">
-              ${escapeHtml(sideA)}
-            </span>
-            <strong>
-              ${escapeHtml(String(scoreA))}
-            </strong>
+          <div class="direct-bracket-team ${winnerA ? "winner" : ""}">
+            <span class="direct-bracket-name">${escapeHtml(getMatchSideName(match.team_a))}</span>
+            <strong>${escapeHtml(String(scoreA))}</strong>
           </div>
-
-          <div
-            class="direct-bracket-team
-              ${winnerB ? "winner" : ""}"
-          >
-            <span class="direct-bracket-name">
-              ${escapeHtml(sideB)}
-            </span>
-            <strong>
-              ${escapeHtml(String(scoreB))}
-            </strong>
+          <div class="direct-bracket-team ${winnerB ? "winner" : ""}">
+            <span class="direct-bracket-name">${escapeHtml(match.team_b ? getMatchSideName(match.team_b) : "BYE")}</span>
+            <strong>${escapeHtml(String(scoreB))}</strong>
           </div>
+          ${action}
+        </div>`;
+    };
 
-          ${
-            !completed &&
-            match.team_a &&
-            match.team_b &&
-            canManageMatch(match)
-              ? `
-                <button
-                  class="btn primary direct-bracket-result-btn"
-                  onclick="openMatchResultModal('${match.id}')"
-                >
-                  Nhập kết quả
-                </button>
-              `
-              : ""
-          }
-
-        </div>
-      `;
-    }
+    const rounds = [...roundMap.values()].sort((a,b) => a.order - b.order);
 
     bracketHtml = `
       <div class="direct-bracket-shell">
-
         <div class="direct-bracket-title">
           <div>
             <strong>🏆 Sơ đồ loại trực tiếp</strong>
-            <div class="muted">
-              Đội thắng gặp đội thắng; đội thua lần đầu
-              tiếp tục thi đấu. Trận đã đấu vẫn được giữ.
-            </div>
+            <div class="muted">Vòng đấu chạy từ trái sang phải. Trận đã đấu luôn được giữ lại.</div>
           </div>
-
-          <span class="chip">
-            ${directMatches.length} trận
-          </span>
+          <span class="chip">${directMatches.length} trận</span>
         </div>
-
         <div class="direct-bracket-scroll">
-
           <div class="direct-bracket">
-
-            ${
-              [...stageMap.entries()]
-                .sort((a,b) => a[0] - b[0])
-                .map(([stage, stageMatches]) => `
-
-                  <div
-                    class="direct-bracket-column"
-                  >
-
-                    <div
-                      class="direct-bracket-column-title"
-                    >
-                      ${visibleStageLabel(stage)}
-                    </div>
-
-                    <div
-                      class="direct-bracket-column-matches"
-                    >
-                      ${
-                        stageMatches
-                          .sort((a,b) => {
-
-                            /*
-                             * Trong cùng một cột:
-                             * Winners trước, Losers sau.
-                             * Không hiện tên nhánh.
-                             */
-                            const aLoser =
-                              /^Nhánh thua/i.test(
-                                String(
-                                  a.round_name || ""
-                                )
-                              ) ? 1 : 0;
-
-                            const bLoser =
-                              /^Nhánh thua/i.test(
-                                String(
-                                  b.round_name || ""
-                                )
-                              ) ? 1 : 0;
-
-                            if(aLoser !== bLoser){
-                              return aLoser - bLoser;
-                            }
-
-                            return (
-                              Number(a.match_no || 0) -
-                              Number(b.match_no || 0)
-                            );
-                          })
-                          .map(directBracketMatchHtml)
-                          .join("")
-                      }
-                    </div>
-
-                  </div>
-
-                `)
-                .join("")
-            }
-
+            ${rounds.map(round => `
+              <div class="direct-bracket-column">
+                <div class="direct-bracket-column-title">${escapeHtml(round.label)}</div>
+                <div class="direct-bracket-column-matches">
+                  ${round.matches.sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0)).map(directCard).join("")}
+                </div>
+              </div>
+            `).join("")}
           </div>
-
         </div>
-
-      </div>
-    `;
+      </div>`;
   }
-
 
   /* =====================================================
      RENDER TOÀN BỘ MỘT GIẢI
@@ -10326,7 +10106,7 @@ async function renderCompetitionStructure(
    * kết quả đã có; quản trị chỉ ghi DB khi thực sự nhập kết quả.
    */
   const directMatches =
-    buildDisplayDoubleEliminationMatches(tournamentId);
+    cleanDirectBracketMatches(tournamentId);
 
   const roundMap = new Map();
 
@@ -15319,6 +15099,7 @@ function _finalMakeDisplayMatch(
     status: teamB ? "scheduled" : "completed",
     target_score: n === 1 ? 11 : 15,
     notes: note || "Trận dự kiến",
+    __source: /đội thua/i.test(String(note || "")) ? "loser" : "winner",
     __virtual: true
   };
 }
@@ -15526,8 +15307,20 @@ async function materializeVirtualDirectMatch(
     return;
   }
 
+  const publicN = Number(String(roundName || "").match(/Vòng\s+(\d+)/i)?.[1] || 1);
+  const internalRoundName =
+    (String(roundName || "").toLowerCase().includes("thua") ||
+     String(roundName || "").toLowerCase().includes("loser"))
+      ? `Nhánh thua — Vòng ${Math.max(1, publicN - 1)}`
+      : `Nhánh thắng — Vòng ${publicN}`;
+  const internalRoundCandidates = [
+    internalRoundName,
+    `Nhánh thắng — Vòng ${publicN}`,
+    `Nhánh thua — Vòng ${Math.max(1, publicN - 1)}`
+  ];
+
   const exists = getTournamentMatches(tournamentId).find(m =>
-    String(m.round_name || "") === String(roundName) &&
+    internalRoundCandidates.includes(String(m.round_name || "")) &&
     Number(m.match_no || 0) === Number(matchNo || 0) &&
     String(m.team_a || "") === String(teamA || "") &&
     String(m.team_b || "") === String(teamB || "")
@@ -15542,7 +15335,17 @@ async function materializeVirtualDirectMatch(
     .from("matches")
     .insert({
       tournament_id: tournamentId,
-      round_name: roundName,
+      round_name: (() => {
+        const vm = cleanDirectBracketMatches(tournamentId).find(m =>
+          m.__virtual &&
+          Number(m.match_no || 0) === Number(matchNo || 0) &&
+          String(m.team_a || "") === String(teamA || "") &&
+          String(m.team_b || "") === String(teamB || "")
+        );
+        return vm && vm.__source === "loser"
+          ? `Nhánh thua — Vòng ${Math.max(1, publicN - 1)}`
+          : `Nhánh thắng — Vòng ${publicN}`;
+      })(),
       match_no: matchNo,
       team_a: teamA,
       team_b: teamB,
@@ -15573,6 +15376,74 @@ function buildDisplayDoubleEliminationMatches(tournamentId){
     tournamentId,
     actual
   );
+}
+
+/* =========================================================
+   CLEAN DIRECT-ELIMINATION ENGINE
+   Một engine duy nhất cho luồng mới.
+   - DB giữ round_name nội bộ để tương thích dữ liệu cũ.
+   - UI chỉ nhìn thấy Vòng 1, Vòng 2, ...
+   - Không ghi DB khi render.
+   ========================================================= */
+function _cleanDirectActualMatches(tournamentId){
+  return getTournamentMatches(tournamentId)
+    .filter(m => m.team_a || m.team_b);
+}
+
+function _cleanDirectRound(n, actual){
+  return actual
+    .filter(m => _finalDisplayRoundNumber(m.round_name) === n)
+    .sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0));
+}
+
+function _cleanAllComplete(rows){
+  return rows.length > 0 && rows.every(matchCompleted);
+}
+
+function _cleanBuildRounds(tournamentId){
+  const actual = _cleanDirectActualMatches(tournamentId);
+  const out = [...actual];
+
+  for(let n=1; n<=32; n++){
+    const current = _cleanDirectRound(n, out);
+    if(!current.length) break;
+    if(!_cleanAllComplete(current)) break;
+
+    const winners = _finalUniqueIds(current.map(matchWinnerId));
+    if(winners.length <= 1) break;
+
+    const next = n + 1;
+    const existing = _cleanDirectRound(next, out);
+    if(existing.length) continue;
+
+    let no=1;
+    const pairs=[];
+
+    if(n===1){
+      /* Vòng 2: thắng V1 gặp thắng V1; thua V1 gặp thua V1. */
+      const losers = _finalUniqueIds(current.map(matchLoserId));
+      _finalPairIds(winners).forEach(pair=>pairs.push({a:pair[0],b:pair[1],source:"winner",note:"Dự kiến từ đội thắng Vòng 1"}));
+      _finalPairIds(losers).forEach(pair=>pairs.push({a:pair[0],b:pair[1],source:"loser",note:"Dự kiến từ đội thua Vòng 1"}));
+      if(losers.length%2===1){
+        pairs.push({a:losers[losers.length-1],b:null,source:"loser",note:"Dự kiến BYE"});
+      }
+    }else{
+      _finalPairIds(winners).forEach(pair=>pairs.push({a:pair[0],b:pair[1],source:"winner",note:`Dự kiến từ đội thắng Vòng ${n}`}));
+    }
+
+    for(const pair of pairs){
+      if(!pair.a) continue;
+      out.push(_finalMakeDisplayMatch(tournamentId,next,no++,pair.a,pair.b,pair.note));
+      out[out.length-1].__source = pair.source;
+    }
+    if(pairs.length) break;
+  }
+
+  return out;
+}
+
+function cleanDirectBracketMatches(tournamentId){
+  return _cleanBuildRounds(tournamentId);
 }
 
 async function _finalSyncDoubleElimination(tournamentId){
