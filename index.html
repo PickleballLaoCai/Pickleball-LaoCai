@@ -4312,6 +4312,104 @@ async function loadMembers(){
    14. HIỂN THỊ THÀNH VIÊN
 ========================================================= */
 
+
+/* =========================================================
+   ADMIN: XÓA THÀNH VIÊN THỬ NGHIỆM
+   - Chỉ Super Admin được xóa.
+   - Không xóa thành viên đã được dùng trong đăng ký giải,
+     để không phá lịch sử/đăng ký/trận đấu.
+   - Xóa lịch sử chấm trình trước rồi mới xóa member.
+========================================================= */
+async function deleteMemberAdmin(memberId){
+  if(!isSuperAdmin()){
+    showToast("Chỉ Quản trị cấp cao mới được xóa thành viên.");
+    return;
+  }
+
+  const id = Number(memberId);
+  if(!Number.isFinite(id)){
+    showToast("ID thành viên không hợp lệ.");
+    return;
+  }
+
+  const member = (Array.isArray(members) ? members : [])
+    .find(m => String(m.id) === String(id));
+
+  if(!member){
+    showToast("Không tìm thấy thành viên.");
+    return;
+  }
+
+  const name = member.full_name || "thành viên này";
+
+  if(!confirm(
+    `XÓA THÀNH VIÊN?\n\n${name}\n\n` +
+    `Thao tác này chỉ dành cho dữ liệu thử nghiệm. ` +
+    `Nếu thành viên đã tham gia giải, hệ thống sẽ không cho xóa để tránh phá dữ liệu giải đấu.`
+  )) return;
+
+  try{
+    /* Không cho xóa nếu đã có đăng ký giải. */
+    const {data: regs, error: regErr} = await supabaseClient
+      .from("tournament_registrations")
+      .select("id")
+      .or(`member_id.eq.${id},member2_id.eq.${id}`)
+      .limit(1);
+
+    if(regErr) throw regErr;
+
+    if(Array.isArray(regs) && regs.length){
+      showToast(
+        "Không thể xóa: thành viên này đã có đăng ký giải. " +
+        "Giữ lại để bảo toàn lịch sử giải đấu."
+      );
+      return;
+    }
+
+    /* Xóa lịch sử trình của member trước. */
+    const {error: histErr} = await supabaseClient
+      .from("rating_history")
+      .delete()
+      .eq("member_id", id);
+
+    if(histErr) throw histErr;
+
+    /* Xóa các đề xuất chấm trình nếu có. */
+    const {error: assErr} = await supabaseClient
+      .from("rating_assessments")
+      .delete()
+      .eq("member_id", id);
+
+    if(assErr){
+      console.warn("Không xóa được rating_assessments:", assErr);
+      /* Không chặn xóa member nếu bảng này không cho delete
+         hoặc không có policy phù hợp. */
+    }
+
+    const {error: memberErr} = await supabaseClient
+      .from("members")
+      .delete()
+      .eq("id", id);
+
+    if(memberErr) throw memberErr;
+
+    members = (Array.isArray(members) ? members : [])
+      .filter(m => String(m.id) !== String(id));
+
+    if(typeof renderMembers === "function") renderMembers();
+    if(typeof renderRatingSelect === "function") renderRatingSelect();
+    if(typeof renderRanking === "function") renderRanking();
+
+    showToast(`Đã xóa thành viên "${name}".`);
+  }catch(error){
+    console.error("DELETE MEMBER ERROR:", error);
+    showToast(
+      "Không thể xóa thành viên: " +
+      (error?.message || error)
+    );
+  }
+}
+
 function renderMembers(){
 
   const container =
@@ -4486,6 +4584,21 @@ function renderMembers(){
                 >
                   Lịch sử
                 </button>
+
+                ${
+                  isSuperAdmin()
+                    ? `
+                      <button
+                        class="btn btn-secondary"
+                        style="padding:6px 9px;margin-left:6px;color:#b42318;border-color:#f1b5b5"
+                        onclick="deleteMemberAdmin('${esc(member.id)}')"
+                        title="Xóa thành viên thử nghiệm"
+                      >
+                        🗑️ Xóa
+                      </button>
+                    `
+                    : ""
+                }
 
               </div>
 
