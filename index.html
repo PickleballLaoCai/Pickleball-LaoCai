@@ -14425,8 +14425,8 @@ async function renderAdminPanel(){
 
   let adminUsers = [];
   if(isSuperAdmin()) {
-    // Dùng RPC SECURITY DEFINER đã tạo trong Supabase.
-    // Không đọc trực tiếp admin_users để tránh lỗi RLS / cột không tồn tại.
+    // Chỉ thay phần tải danh sách quản trị bằng RPC SECURITY DEFINER.
+    // Giữ nguyên toàn bộ phần còn lại của ứng dụng.
     const { data: adminRows, error: adminRowsError } = await supabaseClient
       .rpc("get_admin_users_for_super_admin");
     if(adminRowsError){
