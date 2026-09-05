@@ -19468,9 +19468,15 @@ window.paidRegs = window.paidRegs || function(tournamentId){
       PKL34.pair(m.team_a,m.team_b)===PKL34.pair(a,b)
     );
     if(x) return x;
-    // Compatibility with old direct tournaments: match by public stage + pair.
+    // Compatibility with legacy direct tournaments: only accept the SAME branch
+    // and public stage. Never let an old loser-bracket row satisfy a Winners slot
+    // (or vice versa). This is important because older V25-V33 rows can coexist.
     return rows.find(m=>{
       if(PKL34.completed(m)===false && !m.team_a && !m.team_b) return false;
+      const rn=String(m.round_name||"");
+      const isLoser=/^Nhánh\s+thua/i.test(rn);
+      if(source==="loser" && !isLoser) return false;
+      if(source==="winner" && isLoser) return false;
       return PKL34.displayStage(m)===Number(stage) &&
         PKL34.pair(m.team_a,m.team_b)===PKL34.pair(a,b);
     })||null;
@@ -19548,23 +19554,52 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     if(!paid.length) return [];
 
     const real=PKL34.matches(id);
-    // Giải cũ chưa có bracket_slot: chỉ đọc dữ liệu thật hiện có để không phá lịch cũ.
-    if(!PKL34.hasSavedSlots(id) && real.length){
-      return real
-        .filter(m=>m.team_a||m.team_b)
-        .map(m=>({
-          ...m,
-          __virtual:false,
-          __source:/^Nhánh\s+thua/i.test(String(m.round_name||""))?"loser":"winner",
-          __displayStage:PKL34.displayStage(m),
-          __displayLabel:PKL34.displayStage(m)===99?"Chung kết":PKL34.stageLabel(PKL34.displayStage(m),PKL34.stageCount(paid.length))
-        }))
-        .sort((a,b)=>Number(a.__displayStage||0)-Number(b.__displayStage||0)||Number(a.match_no||0)-Number(b.match_no||0));
-    }
 
-    const slots=PKL34.hasSavedSlots(id)
-      ? PKL34.savedSlots(id)
-      : PKL34.autoSlots(paid.map(r=>String(r.id)));
+    // IMPORTANT: legacy direct tournaments may not have bracket_slot.
+    // Do NOT dump every old match into the new viewer: old V25-V33 engines can
+    // contain obsolete/duplicated loser rounds, which is exactly what caused
+    // the previous Vòng 4/Vòng 5 display. Reconstruct ONLY V1 positions from
+    // the existing V1 rows, then let the single PKL34 engine derive every later
+    // round. Existing later results are picked up by PKL34.actual() above.
+    let slots=null;
+    if(PKL34.hasSavedSlots(id)){
+      slots=PKL34.savedSlots(id);
+    }else{
+      const v1rows=real
+        .filter(m=>{
+          const rn=String(m.round_name||"");
+          return (PKL34.displayStage(m)===1) && !/^Nhánh\s+thua/i.test(rn) && (m.team_a||m.team_b);
+        })
+        .sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0));
+
+      if(v1rows.length){
+        const size=PKL34.power2(paid.length);
+        slots=Array(size).fill(null);
+        const used=new Set();
+        v1rows.forEach((m,i)=>{
+          const no=Math.max(1,Number(m.match_no||i+1));
+          const base=(no-1)*2;
+          if(base<size && m.team_a && !used.has(String(m.team_a))){
+            slots[base]=String(m.team_a); used.add(String(m.team_a));
+          }
+          if(base+1<size && m.team_b && !used.has(String(m.team_b))){
+            slots[base+1]=String(m.team_b); used.add(String(m.team_b));
+          }
+        });
+        // If an old V1 row was incomplete, place any paid team not yet found
+        // into the remaining empty slot(s), without disturbing known positions.
+        paid.forEach(r=>{
+          const rid=String(r.id);
+          if(used.has(rid)) return;
+          const empty=slots.findIndex(x=>!x);
+          if(empty>=0){ slots[empty]=rid; used.add(rid); }
+        });
+      }else{
+        // Brand-new direct tournament: no V1 exists yet, so only the automatic
+        // preview is randomized. It is persisted when BTC actually schedules.
+        slots=PKL34.autoSlots(paid.map(r=>String(r.id)));
+      }
+    }
     const total=PKL34.stageCount(paid.length);
     const out=[];
     let r1=[];
@@ -19677,7 +19712,19 @@ window.paidRegs = window.paidRegs || function(tournamentId){
         notes:"Chờ xác định 2 nhà vô địch nhánh",__virtual:true,__placeholder:true,
         __source:"final",__displayStage:99,__displayLabel:"Chung kết"});
     }
-    return out;
+
+    // Final canonical cleanup: one card per logical branch/stage/match. This
+    // prevents stale duplicate rows from older engines from appearing twice.
+    const seen=new Set(),clean=[];
+    out.forEach(m=>{
+      const key=`${m.__source||"winner"}|${Number(m.__displayStage||1)}|${Number(m.match_no||1)}`;
+      if(seen.has(key)) return;
+      seen.add(key); clean.push(m);
+    });
+    clean.sort((a,b)=>Number(a.__displayStage||1)-Number(b.__displayStage||1)
+      || (a.__source==="final"?2:a.__source==="loser"?1:0)-(b.__source==="final"?2:b.__source==="loser"?1:0)
+      || Number(a.match_no||0)-Number(b.match_no||0));
+    return clean;
   };
 
   PKL34.saveSlots=async function(id,slots,mode){
@@ -19932,7 +19979,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
 
   function escRole(){try{return escapeHtml?.(adminRoleText?.()||"")||"";}catch(e){return "";}}
 
-  console.log("Pickleball Lào Cai — V34.5 single direct engine installed.");
+  console.log("Pickleball Lào Cai — V34.6 single canonical direct engine installed.");
 })();
 
 </script>
