@@ -19319,7 +19319,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
 
 
 /* =========================================================
-   V34.7 — DIRECT TOURNAMENT ENGINE CLEAN
+   V34.8 — DIRECT TOURNAMENT ENGINE CLEAN
    ---------------------------------------------------------
    Chỉ có MỘT engine cuối cho thể thức Loại trực tiếp.
    Không dùng helper _tm/_currentSlots/_paidRegs của các bản cũ.
@@ -19856,7 +19856,11 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     const internal=source==="final"?"Chung kết":PKL34.internalRound(source,stage);
     const existing=PKL34.matches(tournamentId).find(m=>String(m.round_name||"")===internal&&PKL34.pair(m.team_a,m.team_b)===PKL34.pair(teamA,teamB));
     if(existing){await openMatchResultModal(existing.id);return;}
-    const payload={tournament_id:tournamentId,round_name:internal,match_no:Number(matchNo||1),team_a:teamA,team_b:teamB,target_score:Number(wanted.target_score||15),status:"scheduled",score_a:null,score_b:null,notes:`PKL34 — ${source==="winner"?"Winners":"Losers"} Vòng ${stage}`};
+    /* Supabase matches.score_a / score_b are NOT NULL in the existing schema.
+       A newly materialized match is therefore stored as 0-0 while status="scheduled".
+       The result modal immediately replaces these placeholders with the real score.
+       Never insert NULL scores into matches. */
+    const payload={tournament_id:tournamentId,round_name:internal,match_no:Number(matchNo||1),team_a:teamA,team_b:teamB,target_score:Number(wanted.target_score||15),status:"scheduled",score_a:0,score_b:0,notes:`PKL34 — ${source==="winner"?"Winners":"Losers"} Vòng ${stage}`};
     const {data,error}=await supabaseClient.from("matches").insert(payload).select("*").single();
     if(error){console.error("PKL34 materialize:",error);showToast?.("Không thể tạo trận: "+error.message);return;}
     matches.push(data);
@@ -19873,7 +19877,8 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     const card=m=>{
       const done=PKL34.completed(m),bye=!!m.__bye||(!m.team_b&&!!m.team_a),a=m.team_a?PKL34.name(m.team_a):"Chờ kết quả",b=m.team_b?PKL34.name(m.team_b):(m.team_a?(bye?"BYE":"Chờ kết quả"):"Chờ kết quả");
       const action=canEnter&&!done&&m.team_a&&m.team_b?(m.__virtual?`<button class="btn btn-primary" style="margin-top:7px;padding:7px 10px" onclick="materializeVirtualDirectMatch('${esc(selected.id)}','${esc(m.__displayLabel||`Vòng ${m.__displayStage}`)}',${Number(m.match_no||1)},'${esc(m.team_a)}','${esc(m.team_b)}')">📝 Nhập kết quả</button>`:`<button class="btn btn-primary" style="margin-top:7px;padding:7px 10px" onclick="openMatchResultModal('${esc(m.id)}')">📝 Nhập kết quả</button>`):"";
-      return `<div class="card" style="padding:10px;margin-bottom:9px;min-height:108px"><div class="muted">Trận ${Number(m.match_no||1)} · ${bye?"BYE":(m.__placeholder?"Chờ kết quả":(done?"Đã đấu":"Chưa đấu"))}</div><div style="margin-top:6px"><b>${esc(a)}</b><strong style="float:right">${esc(m.score_a??"—")}</strong></div><div style="margin-top:4px"><b>${esc(b)}</b><strong style="float:right">${esc(m.score_b??(bye?0:"—"))}</strong></div>${action}</div>`;
+      const shownA=done?(m.score_a??"—"):"—", shownB=done?(m.score_b??(bye?0:"—")):(bye?0:"—");
+      return `<div class="card" style="padding:10px;margin-bottom:9px;min-height:108px"><div class="muted">Trận ${Number(m.match_no||1)} · ${bye?"BYE":(m.__placeholder?"Chờ kết quả":(done?"Đã đấu":"Chưa đấu"))}</div><div style="margin-top:6px"><b>${esc(a)}</b><strong style="float:right">${esc(shownA)}</strong></div><div style="margin-top:4px"><b>${esc(b)}</b><strong style="float:right">${esc(shownB)}</strong></div>${action}</div>`;
     };
     const cols=Object.entries(grouped).map(([label,ms])=>`<div class="bracket-column" style="width:240px;flex:0 0 240px"><h5 style="text-align:center">${esc(label)}</h5>${ms.sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0)).map(card).join("")}</div>`).join("");
     const v1Done=real.some(m=>String(m.round_name||"")==="Nhánh thắng — Vòng 1"&&PKL34.completed(m));
@@ -19964,7 +19969,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     const card=m=>{
       const done=PKL34.completed(m),bye=!!m.__bye||(!m.team_b&&!!m.team_a);
       const a=m.team_a?PKL34.name(m.team_a):"Chờ kết quả",b=m.team_b?PKL34.name(m.team_b):(m.team_a?(bye?"BYE":"Chờ kết quả"):"Chờ kết quả");
-      const sa=m.score_a??"—",sb=m.score_b??(bye?0:"—"),wa=done&&Number(m.score_a)>Number(m.score_b),wb=done&&Number(m.score_b)>Number(m.score_a);
+      const sa=done?(m.score_a??"—"):"—",sb=done?(m.score_b??(bye?0:"—")):(bye?0:"—"),wa=done&&Number(m.score_a)>Number(m.score_b),wb=done&&Number(m.score_b)>Number(m.score_a);
       let action="";
       if(!done&&m.team_a&&m.team_b&&typeof canManageMatch==="function"&&canManageMatch(m)) action=m.__virtual?`<button class="btn primary direct-bracket-result-btn" onclick="materializeVirtualDirectMatch('${esc(t.id)}','${esc(m.__displayLabel||`Vòng ${m.__displayStage}`)}',${Number(m.match_no||1)},'${esc(m.team_a)}','${esc(m.team_b)}')">Nhập kết quả</button>`:`<button class="btn primary direct-bracket-result-btn" onclick="openMatchResultModal('${esc(m.id)}')">Nhập kết quả</button>`;
       return `<div class="direct-bracket-match ${done?"is-completed":""} ${bye?"is-bye":""}"><div class="direct-bracket-match-head"><span>Trận ${Number(m.match_no||1)}</span><span class="direct-bracket-status">${bye?"BYE":(done?"Đã đấu":(m.__placeholder?"Chờ kết quả":"Chưa đấu"))}</span></div><div class="direct-bracket-team ${wa?"winner":""}"><span class="direct-bracket-name">${esc(a)}</span><strong>${esc(sa)}</strong></div><div class="direct-bracket-team ${wb?"winner":""}"><span class="direct-bracket-name">${esc(b)}</span><strong>${esc(sb)}</strong></div>${action}</div>`;
@@ -19992,7 +19997,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
 
   function escRole(){try{return escapeHtml?.(adminRoleText?.()||"")||"";}catch(e){return "";}}
 
-  console.log("Pickleball Lào Cai — V34.6 single canonical direct engine installed.");
+  console.log("Pickleball Lào Cai — V34.8 single canonical direct engine installed.");
 })();
 
 </script>
