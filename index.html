@@ -18868,8 +18868,8 @@ window.paidRegs = window.paidRegs || function(tournamentId){
    * =========================================================
    * GROUP STAGE — BỐC THĂM THỦ CÔNG
    * =========================================================
-   * Dùng bracket_mode = "manual_group" và group_position.
-   * Không thay đổi engine xếp hạng hiện tại.
+   * Dùng bracket_mode = "manual_group".
+   * Không phụ thuộc cột group_position để tránh lỗi schema cache; vị trí chỉ dùng khi tạo lịch trong phiên hiện tại.
    */
   function _groupNames(count){
     return Array.from({length:Math.max(1,Number(count)||1)},(_,i)=>
@@ -18891,7 +18891,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     names.forEach(n=>map[n]=[]);
     paid.forEach(r=>{
       const g=String(r.group_name||"").trim();
-      const pos=Number(r.group_position||0);
+      const pos=0;
       if(map[g] && pos>0) map[g].push({reg:r,pos});
     });
     Object.values(map).forEach(rows=>rows.sort((a,b)=>a.pos-b.pos));
@@ -18935,7 +18935,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     const groupCount=getGroupCountForTeams(paid.length);
     const names=_groupNames(groupCount);
     const cap=Math.ceil(paid.length/groupCount);
-    const current=paid.map(r=>({id:String(r.id),group:String(r.group_name||""),pos:Number(r.group_position||0)}));
+    const current=paid.map(r=>({id:String(r.id),group:String(r.group_name||""),pos:0}));
     const optGroups=names.map(g=>`<option value="${_esc(g)}">${_esc(g)}</option>`).join("");
 
     const rows=paid.map((r,index)=>{
@@ -19011,11 +19011,11 @@ window.paidRegs = window.paidRegs || function(tournamentId){
       for(const r of paid){
         const a=assignments.find(x=>String(x.id)===String(r.id));
         const {data,error}=await supabaseClient.from('tournament_registrations')
-          .update({group_name:a.group,group_position:a.pos})
+          .update({group_name:a.group})
           .eq('id',r.id).select().single();
         if(error) throw error;
         const idx=registrations.findIndex(x=>String(x.id)===String(r.id));
-        if(idx>=0) registrations[idx]=data||{...registrations[idx],group_name:a.group,group_position:a.pos};
+        if(idx>=0) registrations[idx]=data||{...registrations[idx],group_name:a.group};
       }
       const {data:tData,error:tError}=await supabaseClient.from('tournaments')
         .update({bracket_mode:'manual_group'}).eq('id',tournamentId).select().single();
@@ -19135,10 +19135,10 @@ window.paidRegs = window.paidRegs || function(tournamentId){
       const assignments=[];
       groups.forEach(g=>g.teams.forEach((team,index)=>assignments.push({id:String(team.id),group:g.name,pos:index+1})));
       for(const a of assignments){
-        const {data,error}=await supabaseClient.from('tournament_registrations').update({group_name:a.group,group_position:a.pos}).eq('id',a.id).select().single();
+        const {data,error}=await supabaseClient.from('tournament_registrations').update({group_name:a.group}).eq('id',a.id).select().single();
         if(error) throw error;
         const idx=registrations.findIndex(x=>String(x.id)===String(a.id));
-        if(idx>=0) registrations[idx]=data||{...registrations[idx],group_name:a.group,group_position:a.pos};
+        if(idx>=0) registrations[idx]=data||{...registrations[idx],group_name:a.group};
       }
       const {data:tData,error:tError}=await supabaseClient.from('tournaments').update({bracket_mode:'auto'}).eq('id',tournamentId).select().single();
       if(tError) throw tError;
@@ -19213,7 +19213,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
 
           ${v1Done ? `
             <span class="muted">
-              Vòng 1 đã khóa. Các vòng sau được tính theo engine V33.
+              Vòng 1 đã khóa. Các vòng tiếp theo sẽ tự cập nhật sau khi BTC nhập kết quả.
             </span>
           ` : ""}
         </div>
@@ -19275,7 +19275,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
         ${setup}
 
         <div class="chips">
-          <span class="chip">Loại trực tiếp · V33</span>
+          <span class="chip">Loại trực tiếp · Engine mới</span>
           <span class="chip">${canonical.length} lượt hiển thị</span>
           <span class="chip">${real.filter(_isCompleted).length} trận thật đã đấu</span>
         </div>
@@ -19514,7 +19514,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
   const canEnter=t=>typeof isAdmin==='function'&&isAdmin()&&typeof canManageTournament==='function'&&canManageTournament(t)&&typeof hasAdminPermission==='function'&&hasAdminPermission('enter_results');
   P.html=function(t,admin){
     const id=t.id,paid=P.regs(id),display=P.build(id),total=P.total(paid.length),grouped={};display.forEach(m=>{const s=Number(m.__displayStage||1),lab=s===99?'Chung kết':P.label(s,total);(grouped[lab]??=[]).push(m);});
-    const card=m=>{const done=P.done(m),bye=!!m.__bye||(!m.team_b&&!!m.team_a),a=m.team_a?P.name(m.team_a):'Chờ kết quả',b=m.team_b?P.name(m.team_b):(m.team_a?(bye?'BYE':'Chờ kết quả'):'Chờ kết quả'),sa=done?(m.score_a??'—'):'—',sb=done?(m.score_b??(bye?0:'—')):(bye?0:'—'),wa=done&&Number(m.score_a)>Number(m.score_b),wb=done&&Number(m.score_b)>Number(m.score_a);let action='';if(admin&&canEnter(t)&&!done&&m.team_a&&m.team_b)action=m.__virtual?`<button class="btn primary" onclick="materializeVirtualDirectMatch('${esc(id)}','${esc(m.__displayLabel||'')} ',${Number(m.match_no||1)},'${esc(m.team_a)}','${esc(m.team_b)}')">📝 Nhập kết quả</button>`:`<button class="btn primary" onclick="openMatchResultModal('${esc(m.id)}')">📝 Nhập kết quả</button>`;return `<div class="direct-bracket-match ${done?'is-completed':''} ${bye?'is-bye':''}"><div class="direct-bracket-match-head"><span>Trận ${Number(m.match_no||1)}</span><span>${bye?'BYE':done?'Đã đấu':m.__placeholder?'Chờ kết quả':'Chưa đấu'}</span></div><div class="direct-bracket-team ${wa?'winner':''}"><span>${esc(a)}</span><strong>${esc(sa)}</strong></div><div class="direct-bracket-team ${wb?'winner':''}"><span>${esc(b)}</span><strong>${esc(sb)}</strong></div>${action}</div>`;};
+    const card=m=>{const done=P.done(m),bye=!!m.__bye||(!m.team_b&&!!m.team_a),a=m.team_a?P.name(m.team_a):'Chờ kết quả',b=m.team_b?P.name(m.team_b):(m.team_a?(bye?'BYE':'Chờ kết quả'):'Chờ kết quả'),sa=done?(m.score_a??'—'):'—',sb=done?(m.score_b??(bye?0:'—')):(bye?0:'—'),wa=done&&Number(m.score_a)>Number(m.score_b),wb=done&&Number(m.score_b)>Number(m.score_a);let action='';if(admin&&canEnter(t)&&!done&&m.team_a&&m.team_b)action=m.__virtual?`<button class="btn primary" onclick="materializeVirtualDirectMatch('${esc(id)}','${esc(m.__displayLabel||'')} ',${Number(m.match_no||1)},'${esc(m.team_a)}','${esc(m.team_b)}')">📝 Nhập kết quả</button>`:`<button class="btn primary" onclick="openMatchResultModal('${esc(m.id)}')">📝 Nhập kết quả</button>`;return `<div class="direct-bracket-match ${done?'is-completed':''} ${bye?'is-bye':''}"><div class="direct-bracket-match-head"><span>Trận ${Number(m.match_no||1)}</span><span>${bye?'BYE':done?'Đã đấu':waiting?'Chờ kết quả':'Chưa đấu'}</span></div><div class="direct-bracket-team ${wa?'winner':''}"><span>${esc(a)}</span><strong>${esc(sa)}</strong></div><div class="direct-bracket-team ${wb?'winner':''}"><span>${esc(b)}</span><strong>${esc(sb)}</strong></div>${action}</div>`;};
     const cols=Object.entries(grouped).map(([lab,ms])=>`<div class="direct-bracket-column"><div class="direct-bracket-column-title">${esc(lab)}</div><div class="direct-bracket-column-matches">${ms.sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0)).map(card).join('')}</div></div>`).join('');
     return cols?`<div class="direct-bracket-shell"><div class="direct-bracket-title"><div><strong>🏆 Sơ đồ loại trực tiếp</strong><div class="muted">Các vòng hiển thị liên tục từ trái sang phải. Kết quả cập nhật vào sơ đồ.</div></div><span class="chip">${display.length} lượt</span></div><div class="direct-bracket-scroll"><div class="direct-bracket">${cols}</div></div></div>`:`<div class="notice">Chưa tạo sơ đồ thi đấu. BTC cần bấm <b>Sắp lịch tự động & tạo Vòng 1</b> hoặc <b>Nhập kết quả bốc thăm</b>.</div>`;
   };
@@ -19828,6 +19828,29 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     };
   };
 
+  /*
+   * Future-stage skeleton: show the next qualification stage immediately,
+   * without creating fake DB matches. Once upstream results are known,
+   * D.buildStage replaces these placeholders with concrete teams.
+   */
+  D.futureSkeleton=(id,stage,count,knownA=[])=>{
+    const rows=[];
+    const c=Math.max(1,Number(count)||1);
+    const known=D.unique(knownA);
+    for(let no=1;no<=c;no++){
+      const a=known[(no-1)*2]||null;
+      const b=known[(no-1)*2+1]||null;
+      rows.push({
+        id:`pkl-final-future-${id}-${stage}-${no}`,
+        tournament_id:id,round_name:D.stageLabel(stage),match_no:no,
+        team_a:a,team_b:b,score_a:0,score_b:0,target_score:15,status:'scheduled',
+        notes:`PKL-FINAL — Chờ kết quả vòng trước — ${D.stageLabel(stage)}`,
+        __virtual:true,__placeholder:true,__displayStage:stage,__direct:true
+      });
+    }
+    return rows;
+  };
+
   D.build=id=>{
     const t=D.t(id),regs=D.regs(id);
     if(!t||t.format!=='double_elimination'||regs.length<2)return [];
@@ -19842,8 +19865,23 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     const v2=D.v2(id);
     out.push(...v2);
 
-    /* Chưa xong V2: chỉ hiển thị tới V2. */
-    if(v2.some(r=>!D.done(r)))return out;
+    /*
+     * V2 chưa xong nhưng BTC vẫn phải nhìn thấy Vòng 3.
+     * Với giải lớn, Vòng 3 là vùng chờ: các đội thắng V1 đã biết,
+     * các suất thắng V2 để trống cho tới khi có kết quả thật.
+     */
+    if(v2.some(r=>!D.done(r))){
+      if(regs.length>16){
+        const v1w=D.v1Winners(id);
+        const expectedV2=Math.ceil(v2.length/2);
+        const upper=v1w.length+expectedV2;
+        if(upper>8){
+          const cards=upper>16?Math.ceil(16/2):8;
+          out.push(...D.futureSkeleton(id,3,cards,v1w));
+        }
+      }
+      return out;
+    }
 
     let pool=D.qualPool(id);
 
@@ -20172,7 +20210,8 @@ window.paidRegs = window.paidRegs || function(tournamentId){
 
   D.card=(m,admin,t)=>{
     const done=D.done(m);
-    const bye=!!m.__bye||(!m.team_b&&!!m.team_a);
+    const bye=!!m.__bye;
+    const waiting=!!m.__placeholder || (!m.team_a && !m.team_b);
     const a=m.team_a?D.name(m.team_a):'Chờ kết quả';
     const b=m.team_b?D.name(m.team_b):(bye?'BYE':'Chờ kết quả');
     const sa=bye?'':(done?m.score_a:'—');
@@ -20193,7 +20232,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     return `<div class="direct-bracket-match ${done?'is-completed':''} ${bye?'is-bye':''}">
       <div class="direct-bracket-match-head">
         <span>Trận ${Number(m.match_no||1)}</span>
-        <span>${bye?'BYE':done?'Đã đấu':m.__placeholder?'Chờ kết quả':'Chưa đấu'}</span>
+        <span>${bye?'BYE':done?'Đã đấu':waiting?'Chờ kết quả':'Chưa đấu'}</span>
       </div>
       <div class="direct-bracket-team ${wa?'winner':''}">
         <span>${D.esc(a)}</span><strong>${D.esc(sa)}</strong>
