@@ -19338,14 +19338,14 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     try{
       if(typeof paidRegistrationsForTournament==='function') return paidRegistrationsForTournament(id).filter(r=>String(r.status||'registered')!=='cancelled');
     }catch(e){}
-    return (window.registrations||[]).filter(r=>String(r.tournament_id)===String(id)&&String(r.status||'registered')!=='cancelled'&&String(r.payment_status||'unpaid')==='paid_confirmed');
+    return (Array.isArray(registrations)?registrations:[]).filter(r=>String(r.tournament_id)===String(id)&&String(r.status||'registered')!=='cancelled'&&String(r.payment_status||'unpaid')==='paid_confirmed');
   };
   P.ms=function(id){return (window.matches||[]).filter(m=>String(m.tournament_id)===String(id));};
   P.done=function(m){return !!m&&(m.status==='completed'||m.status==='finished');};
   P.pair=function(a,b){if(!a||!b)return '';return [String(a),String(b)].sort().join('::');};
   P.name=function(id){
     if(!id)return 'BYE';
-    const r=(window.registrations||[]).find(x=>String(x.id)===String(id));
+    const r=(Array.isArray(registrations)?registrations:[]).find(x=>String(x.id)===String(id));
     try{if(r&&typeof getTeamDisplayName==='function')return getTeamDisplayName(r);}catch(e){}
     return r?.team_name||r?.name||String(id);
   };
@@ -19470,7 +19470,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     if(new Set(sel).size!==allowed.size)throw new Error('Phải xếp đủ tất cả đội đã xác nhận nộp phí.');
     if(P.ms(id).some(m=>P.displayStage(m)===1&&P.done(m)))throw new Error('Vòng 1 đã có kết quả. Không thể thay đổi bốc thăm.');
     for(const r of regs){const i=(slots||[]).findIndex(x=>x&&String(x)===String(r.id));const {data,error}=await supabaseClient.from('tournament_registrations').update({bracket_slot:i>=0?i+1:null}).eq('id',r.id).select().single();if(error)throw error;const li=(window.registrations||[]).findIndex(x=>String(x.id)===String(r.id));if(li>=0)registrations[li]=data||{...registrations[li],bracket_slot:i>=0?i+1:null};}
-    const {data,error}=await supabaseClient.from('tournaments').update({bracket_mode:mode}).eq('id',id).select().single();if(error)throw error;const ti=(window.tournaments||[]).findIndex(x=>String(x.id)===String(id));if(ti>=0)tournaments[ti]=data||{...tournaments[ti],bracket_mode:mode};
+    const {data,error}=await supabaseClient.from('tournaments').update({bracket_mode:mode}).eq('id',id).select().single();if(error)throw error;const ti=(Array.isArray(tournaments)?tournaments:[]).findIndex(x=>String(x.id)===String(id));if(ti>=0)tournaments[ti]=data||{...tournaments[ti],bracket_mode:mode};
   };
   P.createV1=async function(id,slots){
     const t=P.t(id),paid=P.regs(id);if(!t||t.format!=='double_elimination')throw new Error('Không tìm thấy giải loại trực tiếp.');if(paid.length<2)throw new Error('Cần ít nhất 2 đội/người đã xác nhận nộp phí.');
@@ -19571,8 +19571,10 @@ window.paidRegs = window.paidRegs || function(tournamentId){
   'use strict';
 
   const D={};
+  // FINAL engine uses the app's lexical state (let tournaments/registrations/matches).
+  // Do not read window.tournaments: top-level let variables are not window properties.
 
-  D.t=id=>(window.tournaments||[]).find(x=>String(x.id)===String(id))||null;
+  D.t=id=>{ const list=Array.isArray(tournaments)?tournaments:[]; return list.find(x=>String(x.id)===String(id))||null; };
   D.regs=id=>{
     try{
       if(typeof paidRegistrationsForTournament==='function'){
@@ -19580,13 +19582,13 @@ window.paidRegs = window.paidRegs || function(tournamentId){
           .filter(r=>String(r.status||'registered')!=='cancelled');
       }
     }catch(e){}
-    return (window.registrations||[]).filter(r=>
+    return (Array.isArray(registrations)?registrations:[]).filter(r=>
       String(r.tournament_id)===String(id) &&
       String(r.status||'registered')!=='cancelled' &&
       String(r.payment_status||'')==='paid_confirmed'
     );
   };
-  D.ms=id=>(window.matches||[]).filter(m=>String(m.tournament_id)===String(id));
+  D.ms=id=>(Array.isArray(matches)?matches:[]).filter(m=>String(m.tournament_id)===String(id));
   D.done=m=>!!m&&(m.status==='completed'||m.status==='finished');
   D.id=x=>x==null?null:String(x);
   D.unique=a=>[...new Set((a||[]).filter(Boolean).map(String))];
@@ -19596,7 +19598,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     :String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[c]));
   D.name=id=>{
     if(!id)return 'BYE';
-    const r=(window.registrations||[]).find(x=>String(x.id)===String(id));
+    const r=(Array.isArray(registrations)?registrations:[]).find(x=>String(x.id)===String(id));
     try{if(r&&typeof getTeamDisplayName==='function')return getTeamDisplayName(r);}catch(e){}
     return r?.team_name||r?.name||r?.full_name||String(id);
   };
@@ -19929,20 +19931,19 @@ window.paidRegs = window.paidRegs || function(tournamentId){
    */
   D.cleanupLegacy=async id=>{
     const rows=D.ms(id).filter(D.isDirectRow);
-    const completed=rows.filter(D.done);
-    if(completed.length){
-      throw new Error('Giải đã có kết quả trực tiếp cũ. Không tự xóa dữ liệu đã đấu; hãy tạo giải mới hoặc xử lý dữ liệu cũ trước.');
+    const legacy=rows.filter(m=>/V33|V34|Nhánh\s+(thắng|thua)/i.test(String(m.notes||'')+' '+String(m.round_name||'')));
+    const finalRows=rows.filter(m=>!legacy.includes(m));
+    const completedFinal=finalRows.filter(D.done);
+    if(completedFinal.length){
+      throw new Error('Giải đã có kết quả của engine mới; không thể chia lại Vòng 1.');
     }
-
-    const ids=rows.map(m=>m.id).filter(Boolean);
+    // Remove only old V33/V34 generated rows, including stale completed/BYE rows.
+    const ids=[...legacy,...finalRows].map(m=>m.id).filter(Boolean);
     if(ids.length){
       const {error}=await supabaseClient.from('matches').delete().in('id',ids);
       if(error)throw error;
     }
-
-    if(Array.isArray(window.matches)){
-      window.matches=window.matches.filter(m=>String(m.tournament_id)!==String(id)||!D.isDirectRow(m));
-    }
+    matches=matches.filter(m=>String(m.tournament_id)!==String(id)||!ids.includes(m.id));
   };
 
   D.saveSlots=async(id,ordered)=>{
@@ -19967,16 +19968,16 @@ window.paidRegs = window.paidRegs || function(tournamentId){
         .eq('id',ids[i])
         .select().single();
       if(error)throw error;
-      const idx=(window.registrations||[]).findIndex(r=>String(r.id)===String(ids[i]));
-      if(idx>=0)window.registrations[idx]=data||{...window.registrations[idx],bracket_slot:i+1};
+      const idx=(Array.isArray(registrations)?registrations:[]).findIndex(r=>String(r.id)===String(ids[i]));
+      if(idx>=0)registrations[idx]=data||{...registrations[idx],bracket_slot:i+1};
     }
 
     const {data:tdata,error:terr}=await supabaseClient
       .from('tournaments').update({bracket_mode:'manual'}).eq('id',id).select().single();
     if(terr)throw terr;
 
-    const ti=(window.tournaments||[]).findIndex(x=>String(x.id)===String(id));
-    if(ti>=0)window.tournaments[ti]=tdata||{...window.tournaments[ti],bracket_mode:'manual'};
+    const ti=(Array.isArray(tournaments)?tournaments:[]).findIndex(x=>String(x.id)===String(id));
+    if(ti>=0)tournaments[ti]=tdata||{...tournaments[ti],bracket_mode:'manual'};
   };
 
   D.createV1=async(id,ordered)=>{
@@ -19999,7 +20000,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     if(rows.length){
       const {data,error}=await supabaseClient.from('matches').insert(rows).select('*');
       if(error)throw error;
-      if(Array.isArray(window.matches))window.matches.push(...(data||[]));
+      if(Array.isArray(matches))matches.push(...(data||[]));
     }
 
     if(typeof loadAllMatches==='function')await loadAllMatches();
@@ -20098,7 +20099,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
    */
   D.materialize=async(id,stage,no,a,b)=>{
     const t=D.t(id);
-    if(!t||t.format!=='double_elimination')return;
+    if(!t||t.format!=='double_elimination'){ console.error('PKL FINAL: tournament not found', id, tournaments); showToast?.('Không xác định được giải trực tiếp. Hãy tải lại trang rồi mở lại giải.'); return; }
 
     if(typeof canManageTournament==='function'&&!canManageTournament(t)){
       showToast?.('Bạn không có quyền quản lý giải này.');return;
@@ -20145,7 +20146,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
       showToast?.('Không thể tạo trận: '+error.message);return;
     }
 
-    if(Array.isArray(window.matches))window.matches.push(data);
+    if(Array.isArray(matches))matches.push(data);
     if(typeof loadAllMatches==='function')await loadAllMatches();
     if(window.__adminTournamentContext&&typeof adminOpenTournamentPage==='function')
       await adminOpenTournamentPage(id,true);
