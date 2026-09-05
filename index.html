@@ -1919,6 +1919,7 @@ th{
 
 
 <!-- V16 AUDIT: Direct bracket engine isolated; existing rating/permission modules preserved. -->
+<style id="v29-public-create-guard">#view-tournaments #tournamentCreateCard{display:none !important;}</style>
 </head>
 
 
@@ -13968,7 +13969,7 @@ async function loadCurrentAdmin(){
         user_id: currentSession.user.id,
         role: roleData,
         club_name: clubData || null,
-        permissions: roleData === "super_admin" ? Object.keys(ADMIN_PERMISSION_LABELS).reduce((o,k)=>(o[k]=true,o),{}) : normalizeAdminPermissions(permissionData),
+        permissions: roleData === "super_admin" ? Object.keys(ADMIN_PERMISSION_LABELS).reduce((o,k)=>(o[k]=true,o),{}) : (permissionData && Object.keys(permissionData).length ? normalizeAdminPermissions(permissionData) : {...DEFAULT_CLUB_PERMISSIONS}),
         is_active: true,
         created_at: null
       };
@@ -13994,7 +13995,7 @@ async function loadCurrentAdmin(){
     return;
   }
   if(data){
-    currentAdmin = { ...data, permissions: data.role === "super_admin" ? Object.keys(ADMIN_PERMISSION_LABELS).reduce((o,k)=>(o[k]=true,o),{}) : normalizeAdminPermissions(data.permissions) };
+    currentAdmin = { ...data, permissions: data.role === "super_admin" ? Object.keys(ADMIN_PERMISSION_LABELS).reduce((o,k)=>(o[k]=true,o),{}) : ((data.permissions && Object.keys(data.permissions).length) ? normalizeAdminPermissions(data.permissions) : {...DEFAULT_CLUB_PERMISSIONS}) };
     if(data.is_active === false){ currentAdmin = null; }
   } else {
     currentAdmin = null;
@@ -17152,13 +17153,12 @@ _v26Install();
 function _v27ApplyTournamentCreateVisibility(){
   const card=document.getElementById("tournamentCreateCard");
   if(card){
-    card.style.display=canCreateTournament()?"":"none";
+    // Form tạo giải chỉ xuất hiện trong khu vực Quản trị/Chủ tịch CLB.
+    card.style.setProperty("display","none","important");
   }
   const hero=document.querySelector("#view-tournaments .hero p");
   if(hero){
-    hero.textContent=canCreateTournament()
-      ? "Tạo giải, đăng ký thi đấu và điều phối trận."
-      : "Xem giải đấu, đăng ký thi đấu và theo dõi kết quả.";
+    hero.textContent="Xem giải đấu, đăng ký thi đấu và theo dõi kết quả.";
   }
 }
 
@@ -17493,39 +17493,10 @@ renderTournamentPanel=async function(){
 // đảm bảo nếu một bản builder cũ còn được gọi thì phần standings không được nối.
 
 /* ---------- V27: RENDER LẠI QUYỀN TẠO GIẢI SAU LOGIN/LOGOUT ---------- */
-const _v27OldLoadCurrentAdmin=loadCurrentAdmin;
-loadCurrentAdmin=async function(){
-  await _v27OldLoadCurrentAdmin();
-  _v27ApplyTournamentCreateVisibility();
-};
-
 
 /* =========================================================
-   52. START
+   V29 — FIX QUYỀN TẠO GIẢI + FORM TẠO GIẢI TRONG QUẢN TRỊ
 ========================================================= */
-
-initializeApplication();
-
-startAutoRefresh();
-
-
-/* =========================================================
-   HẾT PHẦN 4/4
-========================================================= */
-
-</script>
-
-</body>
-</html>
-
-
-/* =========================================================
-   V28 — KHU VỰC TẠO GIẢI CHỈ DÀNH CHO QUẢN TRỊ / CHỦ CLB
-   - Người dùng công khai không thấy form tạo giải.
-   - Chủ CLB / Quản trị thấy nút "Tạo giải đấu" trong khu vực quản trị.
-   - Dùng cùng form và cùng logic tạo giải cũ, không thay đổi schema.
-========================================================= */
-
 function _v28HidePublicTournamentCreate(){
   const card=document.getElementById("tournamentCreateCard");
   if(card) card.style.setProperty("display","none","important");
@@ -17645,3 +17616,38 @@ function openAdminCreateTournamentModal(){
 /* Luôn ẩn form công khai, kể cả trước khi renderTournaments chạy. */
 _v28HidePublicTournamentCreate();
 
+_v27OldLoadCurrentAdmin=loadCurrentAdmin;
+loadCurrentAdmin=async function(){
+  await _v27OldLoadCurrentAdmin();
+  _v27ApplyTournamentCreateVisibility();
+};
+
+
+/* =========================================================
+   52. START
+========================================================= */
+
+initializeApplication();
+
+startAutoRefresh();
+
+
+/* =========================================================
+   HẾT PHẦN 4/4
+========================================================= */
+
+</script>
+
+
+<script>
+(function(){
+  function guard(){
+    const card=document.getElementById("tournamentCreateCard");
+    if(card) card.style.setProperty("display","none","important");
+  }
+  guard();
+  document.addEventListener("DOMContentLoaded",guard);
+})();
+</script>
+</body>
+</html>
