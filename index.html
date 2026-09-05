@@ -19319,7 +19319,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
 
 
 /* =========================================================
-   V34.5 — DIRECT TOURNAMENT ENGINE CLEAN
+   V34.7 — DIRECT TOURNAMENT ENGINE CLEAN
    ---------------------------------------------------------
    Chỉ có MỘT engine cuối cho thể thức Loại trực tiếp.
    Không dùng helper _tm/_currentSlots/_paidRegs của các bản cũ.
@@ -19426,21 +19426,65 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     return num;
   };
 
-  PKL34.savedSlots=function(id){
+  /* V34.7: always normalize V1 to a complete power-of-two bracket.
+     Older versions could leave duplicate/missing bracket_slot values in Supabase.
+     We repair the VIEW in memory first, preserving any real V1 pair already played,
+     then fill every remaining registered team into the remaining slots. */
+  PKL34.normalizedSlots=function(id){
     const regs=PKL34.regs(id);
     const size=PKL34.power2(regs.length);
+    const allowed=new Set(regs.map(r=>String(r.id)));
     const slots=Array(size).fill(null);
+    const used=new Set();
+
+    // 1) Prefer the actual V1 rows already stored, because their positions/results
+    // are historical facts and must not be rearranged when viewing an old event.
+    const rows=PKL34.matches(id)
+      .filter(m=>PKL34.displayStage(m)===1 && !/^Nhánh\s+thua/i.test(String(m.round_name||"")))
+      .sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0));
+    rows.forEach(m=>{
+      const no=Math.max(1,Number(m.match_no||1));
+      const base=(no-1)*2;
+      if(base>=size) return;
+      [m.team_a,m.team_b].forEach((team,offset)=>{
+        const tid=team?String(team):null;
+        const pos=base+offset;
+        if(!tid || !allowed.has(tid) || used.has(tid) || pos>=size) return;
+        slots[pos]=tid; used.add(tid);
+      });
+    });
+
+    // 2) Then use saved bracket slots only where the slot is still free and the
+    // registration has not already been placed by a historical V1 row.
     regs.forEach(r=>{
-      const n=Number(r.bracket_slot||0);
-      if(n>=1 && n<=size) slots[n-1]=String(r.id);
+      const tid=String(r.id), n=Number(r.bracket_slot||0);
+      if(used.has(tid) || n<1 || n>size || slots[n-1]) return;
+      slots[n-1]=tid; used.add(tid);
+    });
+
+    // 3) Finally fill every remaining registered team into empty positions.
+    const empty=[];
+    for(let i=0;i<size;i++) if(!slots[i]) empty.push(i);
+    regs.forEach(r=>{
+      const tid=String(r.id);
+      if(used.has(tid)) return;
+      const pos=empty.shift();
+      if(pos===undefined) return;
+      slots[pos]=tid; used.add(tid);
     });
     return slots;
   };
 
+  PKL34.savedSlots=function(id){
+    return PKL34.normalizedSlots(id);
+  };
+
   PKL34.hasSavedSlots=function(id){
     const regs=PKL34.regs(id);
-    return regs.length>0 && regs.every(r=>Number(r.bracket_slot||0)>0) &&
-      new Set(regs.map(r=>String(r.id))).size===regs.length;
+    const size=PKL34.power2(regs.length);
+    if(!regs.length) return false;
+    const raw=regs.map(r=>Number(r.bracket_slot||0));
+    return raw.every(n=>n>=1 && n<=size) && new Set(raw).size===regs.length;
   };
 
   PKL34.autoSlots=function(ids){
@@ -19562,43 +19606,12 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     // the existing V1 rows, then let the single PKL34 engine derive every later
     // round. Existing later results are picked up by PKL34.actual() above.
     let slots=null;
-    if(PKL34.hasSavedSlots(id)){
-      slots=PKL34.savedSlots(id);
-    }else{
-      const v1rows=real
-        .filter(m=>{
-          const rn=String(m.round_name||"");
-          return (PKL34.displayStage(m)===1) && !/^Nhánh\s+thua/i.test(rn) && (m.team_a||m.team_b);
-        })
-        .sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0));
-
-      if(v1rows.length){
-        const size=PKL34.power2(paid.length);
-        slots=Array(size).fill(null);
-        const used=new Set();
-        v1rows.forEach((m,i)=>{
-          const no=Math.max(1,Number(m.match_no||i+1));
-          const base=(no-1)*2;
-          if(base<size && m.team_a && !used.has(String(m.team_a))){
-            slots[base]=String(m.team_a); used.add(String(m.team_a));
-          }
-          if(base+1<size && m.team_b && !used.has(String(m.team_b))){
-            slots[base+1]=String(m.team_b); used.add(String(m.team_b));
-          }
-        });
-        // If an old V1 row was incomplete, place any paid team not yet found
-        // into the remaining empty slot(s), without disturbing known positions.
-        paid.forEach(r=>{
-          const rid=String(r.id);
-          if(used.has(rid)) return;
-          const empty=slots.findIndex(x=>!x);
-          if(empty>=0){ slots[empty]=rid; used.add(rid); }
-        });
-      }else{
-        // Brand-new direct tournament: no V1 exists yet, so only the automatic
-        // preview is randomized. It is persisted when BTC actually schedules.
-        slots=PKL34.autoSlots(paid.map(r=>String(r.id)));
-      }
+    // Always use the normalized complete V1 slot array. This guarantees that
+    // 7 teams render 4 V1 cards, 16 teams render 8 V1 cards, etc., even if an
+    // older version left incomplete/duplicate bracket_slot data.
+    slots=PKL34.normalizedSlots(id);
+    if(!slots.some(Boolean)){
+      slots=PKL34.autoSlots(paid.map(r=>String(r.id)));
     }
     const total=PKL34.stageCount(paid.length);
     const out=[];
