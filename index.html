@@ -10,7 +10,7 @@
   content="width=device-width,initial-scale=1.0"
 >
 
-<title>Pickleball Lào Cai</title>
+<title>Pickleball Lào Cai — V25</title>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
@@ -11922,6 +11922,14 @@ async function submitMatchResult(matchId) {
     }
 
 
+    /*
+     * V25: giữ nguyên ngữ cảnh quản trị.
+     * Trước đây closeModal() + render... khiến người dùng rơi ra giao diện công khai.
+     */
+    const adminContext = window.__adminTournamentContext && tournament
+      ? { ...window.__adminTournamentContext }
+      : null;
+
     closeModal();
 
     await loadAllMatches();
@@ -11933,6 +11941,13 @@ async function submitMatchResult(matchId) {
     }
 
     renderResults();
+
+    if (adminContext && isAdmin()) {
+      await adminOpenTournamentPage(
+        adminContext.tournamentId,
+        true
+      );
+    }
 
     showToast(
       "Đã lưu kết quả thành công."
@@ -14333,6 +14348,11 @@ function adminOpenTournamentPage(tournamentId, focusResults=false){
   }
   const canEnter=canManageTournament(selected)&&hasAdminPermission("enter_results");
   currentTournamentId=selected.id;
+  // V25: lưu ngữ cảnh quản trị để sau khi nhập KQ không rơi về giao diện công khai.
+  window.__adminTournamentContext = {
+    tournamentId: String(selected.id),
+    focusResults: !!focusResults
+  };
   let work="";
   try{ work=_adminBuildSelectedTournamentHtml(selected,canEnter); }
   catch(err){ console.error("ADMIN TOURNAMENT PAGE:",err); showToast("Không thể mở trang quản lý giải: "+(err?.message||"Lỗi không xác định")); return; }
@@ -15469,8 +15489,10 @@ async function materializeVirtualDirectMatch(
   );
 
   const source=vm?.__source==="loser" ? "loser" : "winner";
+  // V25: cột công khai Vòng 2 chứa nhánh thua Vòng 1,
+  // Vòng 3 chứa nhánh thua Vòng 2...
   const internalRoundName=source==="loser"
-    ? `Nhánh thua — Vòng ${stage}`
+    ? `Nhánh thua — Vòng ${Math.max(1, stage - 1)}`
     : `Nhánh thắng — Vòng ${stage}`;
 
   const payload={
@@ -16129,6 +16151,376 @@ function publicRoundLabel(roundName){
   return publicRoundInfo(roundName).label;
 }
 
+
+
+/* =========================================================
+   V25 — CANONICAL DOUBLE ELIMINATION ENGINE
+   ---------------------------------------------------------
+   Mục tiêu:
+   - DB cũ được giữ nguyên, không xoá dữ liệu.
+   - UI chỉ hiển thị Vòng 1, Vòng 2, Vòng 3... + Chung kết.
+   - Mỗi đội chỉ xuất hiện tối đa 1 lần trong một Vòng.
+   - Đội thua lần 1 xuống nhóm thua; thua lần 2 bị loại.
+   - Không đưa đội đã đủ 2 trận thua vào vòng tiếp theo.
+   - BYE chỉ là lượt đi tiếp, không phải trận tính rating.
+   - Không tự INSERT/UPDATE DB khi chỉ mở/xem giải.
+   - Sau khi nhập kết quả, admin vẫn ở trong trang quản trị.
+========================================================= */
+
+function _v25PairKey(a,b){
+  if(a===null || a===undefined || a==="") return "";
+  if(b===null || b===undefined || b==="") return `BYE::${String(a)}`;
+  return [String(a),String(b)].sort().join("::");
+}
+
+function _v25Unique(ids){
+  const out=[];
+  for(const id of ids || []){
+    if(id===null || id===undefined || id==="") continue;
+    if(!out.some(x=>String(x)===String(id))) out.push(id);
+  }
+  return out;
+}
+
+function _v25Completed(m){
+  if(!m) return false;
+  if(m.team_a && !m.team_b) return true; // BYE
+  const s=String(m.status||"").toLowerCase();
+  return s==="completed" || s==="finished";
+}
+
+function _v25Winner(m){
+  if(!_v25Completed(m)) return null;
+  if(m.team_a && !m.team_b) return m.team_a;
+  const a=Number(m.score_a), b=Number(m.score_b);
+  if(!Number.isFinite(a)||!Number.isFinite(b)||a===b) return null;
+  return a>b ? m.team_a : m.team_b;
+}
+
+function _v25Loser(m){
+  if(!_v25Completed(m) || !m.team_b) return null;
+  const a=Number(m.score_a), b=Number(m.score_b);
+  if(!Number.isFinite(a)||!Number.isFinite(b)||a===b) return null;
+  return a>b ? m.team_b : m.team_a;
+}
+
+function _v25Actual(tournamentId){
+  return getTournamentMatches(tournamentId)
+    .filter(m=>m && (m.team_a || m.team_b));
+}
+
+function _v25InternalRows(actual, prefix, n){
+  return actual
+    .filter(m=>String(m.round_name||"")===`${prefix} — Vòng ${n}`)
+    .sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0));
+}
+
+function _v25Virtual(tournamentId, stage, no, a, b, source, note){
+  const bye=!!a && !b;
+  return {
+    id:`virtual-v25-${tournamentId}-${stage}-${no}`,
+    tournament_id:tournamentId,
+    round_name:`Vòng ${stage}`,
+    match_no:no,
+    team_a:a||null,
+    team_b:b||null,
+    score_a:bye ? (stage===1 ? 11 : 15) : null,
+    score_b:bye ? 0 : null,
+    status:bye ? "completed" : "scheduled",
+    target_score:stage===1 ? 11 : 15,
+    notes:(note||"Trận dự kiến") + (bye ? " — BYE, không tính rating" : ""),
+    __virtual:true,
+    __source:source||"winner",
+    __displayStage:stage,
+    __displayLabel:`Vòng ${stage}`
+  };
+}
+
+function _v25PickActual(rows, a, b, usedActual){
+  const key=_v25PairKey(a,b);
+  const candidates=(rows||[]).filter(m=>
+    !usedActual.has(String(m.id)) &&
+    _v25PairKey(m.team_a,m.team_b)===key
+  );
+  if(!candidates.length) return null;
+  candidates.sort((x,y)=>{
+    const xc=_v25Completed(x)?1:0;
+    const yc=_v25Completed(y)?1:0;
+    if(xc!==yc) return yc-xc;
+    return Number(x.match_no||0)-Number(y.match_no||0);
+  });
+  return candidates[0];
+}
+
+function _v25Pair(ids){
+  const clean=_v25Unique(ids), pairs=[];
+  for(let i=0;i<clean.length;i+=2){
+    pairs.push([clean[i],clean[i+1]??null]);
+  }
+  return pairs;
+}
+
+function _v25BuildDirectDisplay(tournamentId){
+  const actual=_v25Actual(tournamentId);
+  if(!actual.length) return [];
+
+  const usedActual=new Set();
+  const result=[];
+
+  /* Vòng 1: chỉ lấy đúng nhánh thắng Vòng 1. */
+  const wb1=_v25InternalRows(actual,"Nhánh thắng",1);
+  const r1=[];
+  const seenV1=new Set();
+  for(const m of wb1){
+    const ids=[m.team_a,m.team_b].filter(Boolean).map(String);
+    if(!ids.length || ids.some(id=>seenV1.has(id))) continue;
+    ids.forEach(id=>seenV1.add(id));
+    usedActual.add(String(m.id));
+    r1.push({...m,__source:"initial",__displayStage:1,__displayLabel:"Vòng 1"});
+  }
+  if(!r1.length) return [];
+  result.push(...r1);
+
+  /* Chưa xong V1 thì chưa thể biết V2. */
+  if(!r1.every(_v25Completed)) return result;
+
+  let wb=_v25Unique(r1.map(_v25Winner));
+  let lb=_v25Unique(r1.map(_v25Loser).filter(Boolean));
+
+  for(let stage=2; stage<=32; stage++){
+    /*
+     * Khi chỉ còn 1 đội ở mỗi nhóm, ghép Chung kết.
+     * Không tạo các cột BYE lặp lại cho nhà vô địch nhóm thắng.
+     */
+    if(wb.length===1 && lb.length===1){
+      const pairKey=_v25PairKey(wb[0],lb[0]);
+      const finals=actual.filter(m=>
+        !usedActual.has(String(m.id)) &&
+        /chung\s*kết|grand\s*final/i.test(String(m.round_name||"")) &&
+        _v25PairKey(m.team_a,m.team_b)===pairKey
+      );
+      finals.sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0));
+      const f=finals[0];
+      if(f){
+        usedActual.add(String(f.id));
+        result.push({...f,__source:"final",__displayStage:99,__displayLabel:"Chung kết"});
+      }else{
+        result.push(_v25Virtual(tournamentId,99,1,wb[0],lb[0],"final","Chung kết"));
+      }
+      break;
+    }
+
+    /* Nhà vô địch nhánh thắng đã đứng một mình: chỉ còn nhóm thua chạy tiếp. */
+    const includeWB = wb.length > 1;
+    const wbPairs=includeWB ? _v25Pair(wb) : [];
+    const lbPairs=_v25Pair(lb);
+
+    const wbRows=_v25InternalRows(actual,"Nhánh thắng",stage);
+    const lbRows=_v25InternalRows(actual,"Nhánh thua",stage-1);
+
+    const stageRows=[];
+    const seenStage=new Set();
+    let no=1;
+
+    function addExpected(pair,source,actualRows,note){
+      const a=pair[0]??null, b=pair[1]??null;
+      if(!a) return;
+      const ids=[a,b].filter(Boolean).map(String);
+      if(ids.some(id=>seenStage.has(id))) return;
+
+      const act=_v25PickActual(actualRows,a,b,usedActual);
+      const row=act
+        ? {...act,__source:source,__displayStage:stage,__displayLabel:`Vòng ${stage}`}
+        : _v25Virtual(tournamentId,stage,no,a,b,source,note);
+
+      if(act) usedActual.add(String(act.id));
+      ids.forEach(id=>seenStage.add(id));
+      stageRows.push(row);
+      no++;
+    }
+
+    for(const p of wbPairs){
+      addExpected(p,"winner",wbRows,`Dự kiến: đội thắng Vòng ${stage-1} gặp nhau`);
+    }
+    for(const p of lbPairs){
+      addExpected(p,"loser",lbRows,`Dự kiến: nhóm thua tiếp tục ở Vòng ${stage}`);
+    }
+
+    /*
+     * Nếu nhóm thua có số lẻ, đội cuối nhận BYE.
+     * Chỉ thêm nếu nó chưa bị dùng bởi một trận khác trong cùng stage.
+     */
+    if(lb.length%2===1){
+      const last=lb[lb.length-1];
+      if(last && !seenStage.has(String(last))){
+        addExpected([last,null],"loser",lbRows,"Dự kiến BYE cho nhóm thua");
+      }
+    }
+
+    if(!stageRows.length) break;
+    result.push(...stageRows);
+
+    /* Cột hiện tại còn trận chưa đấu: dừng tại đây. */
+    if(!stageRows.every(_v25Completed)) break;
+
+    const nextWB=[];
+    const nextLB=[];
+
+    for(const m of stageRows){
+      const w=_v25Winner(m);
+      const l=_v25Loser(m);
+      if(!w) continue;
+
+      if(m.__source==="winner"){
+        nextWB.push(w);
+        if(l) nextLB.push(l);       // thua lần 1 -> nhóm thua
+      }else if(m.__source==="loser"){
+        nextLB.push(w);              // thắng nhóm thua -> tiếp tục
+        /* loser ở đây có đủ 2 lần thua -> loại, không push tiếp. */
+      }
+    }
+
+    wb=_v25Unique(nextWB);
+    lb=_v25Unique(nextLB);
+
+    if(wb.length===0 || lb.length===0){
+      if(wb.length===1 && lb.length===0) break;
+    }
+  }
+
+  return result.map(m=>
+    Number(m.__displayStage)===99
+      ? {...m,__displayLabel:"Chung kết"}
+      : {...m,__displayLabel:`Vòng ${Number(m.__displayStage||1)}`}
+  );
+}
+
+function cleanDirectBracketMatches(tournamentId){
+  return _v25BuildDirectDisplay(tournamentId);
+}
+
+/*
+ * V25: tuyệt đối không dùng các engine cũ để tự sinh vòng mới.
+ * Các trận tương lai được dựng ảo trong VIEW; admin chỉ materialize
+ * đúng trận mà họ bấm "Nhập kết quả".
+ */
+async function processByeMatches(tournamentId, continueProgress=true){
+  return false;
+}
+
+async function syncExistingDoubleEliminationBrackets(){
+  return false;
+}
+
+async function ensureDoubleEliminationStageTwo(tournamentId){
+  return false;
+}
+
+async function advanceDoubleEliminationProgress(tournamentId, shouldRender=true){
+  if(shouldRender && typeof renderTournamentPanel === "function") await renderTournamentPanel();
+  return false;
+}
+
+async function advanceDoubleElimination(tournament, match, winner, loser){
+  if(!tournament || !match) return;
+  const isBye=String(match.notes||"").toLowerCase().includes("bye") || !match.team_b;
+  if(!isBye){
+    try{ await saveHeadToHead(tournament.id,match); }
+    catch(error){ console.warn("V25 saveHeadToHead:",error); }
+  }
+  /* Không tạo vòng DB tại đây. VIEW canonical tự dựng vòng tiếp theo. */
+}
+
+/*
+ * V25 materialize: map đúng public stage -> internal source round.
+ * Không cho đội có 2 trận trong cùng Vòng.
+ */
+async function materializeVirtualDirectMatch(tournamentId, roundName, matchNo, teamA, teamB){
+  if(!_finalIsAdminContext()){
+    showToast("Cần đăng nhập quản trị để nhập kết quả.");
+    return;
+  }
+  const tournament=tournamentById(tournamentId);
+  if(!tournament){ showToast("Không tìm thấy giải đấu."); return; }
+  if(!teamA || !teamB){ showToast("Trận BYE không cần nhập kết quả."); return; }
+  if(!hasAdminPermission("enter_results") && !isSuperAdmin()){
+    showToast("Tài khoản chưa được cấp quyền nhập kết quả.");
+    return;
+  }
+
+  const stage=Number(String(roundName||"").match(/Vòng\s+(\d+)/i)?.[1] || 1);
+  const source=(()=>{
+    const vm=cleanDirectBracketMatches(tournamentId).find(m=>
+      m.__virtual &&
+      Number(m.__displayStage||stage)===stage &&
+      _v25PairKey(m.team_a,m.team_b)===_v25PairKey(teamA,teamB)
+    );
+    return vm?.__source==="loser" ? "loser" : "winner";
+  })();
+
+  const internalRoundName=source==="loser"
+    ? `Nhánh thua — Vòng ${Math.max(1,stage-1)}`
+    : `Nhánh thắng — Vòng ${stage}`;
+
+  const sameStage=cleanDirectBracketMatches(tournamentId).filter(m=>
+    Number(m.__displayStage||0)===stage && m.team_a
+  );
+  const samePair=sameStage.find(m=>
+    _v25PairKey(m.team_a,m.team_b)===_v25PairKey(teamA,teamB) && !m.__virtual
+  );
+  if(samePair){ await openMatchResultModal(samePair.id); return; }
+
+  const conflicting=sameStage.find(m=>{
+    if(m.__virtual) return false;
+    const ids=[m.team_a,m.team_b].filter(Boolean).map(String);
+    return ids.includes(String(teamA)) || ids.includes(String(teamB));
+  });
+  if(conflicting){
+    showToast("Đội này đã có trận ở Vòng "+stage+", không thể tạo trận trùng.");
+    return;
+  }
+
+  const exactInternal=getTournamentMatches(tournamentId).find(m=>
+    String(m.round_name||"")===internalRoundName &&
+    _v25PairKey(m.team_a,m.team_b)===_v25PairKey(teamA,teamB)
+  );
+  if(exactInternal){ await openMatchResultModal(exactInternal.id); return; }
+
+  const payload={
+    tournament_id:tournamentId,
+    round_name:internalRoundName,
+    match_no:Number(matchNo||1),
+    team_a:teamA,
+    team_b:teamB,
+    target_score:stage===1 ? 11 : 15,
+    status:"scheduled",
+    notes:"Tạo từ sơ đồ thi đấu V25"
+  };
+
+  const {data,error}=await supabaseClient
+    .from("matches")
+    .insert(payload)
+    .select("*")
+    .single();
+  if(error){
+    console.error("V25 materializeVirtualDirectMatch:",error);
+    showToast("Không thể tạo trận: "+(error.message||"Lỗi Supabase"));
+    return;
+  }
+  matches.push(data);
+  await adminOpenTournamentPage(tournamentId,true);
+  await openMatchResultModal(data.id);
+}
+
+/* V25: admin page luôn có context để submitMatchResult quay lại đúng giải. */
+const _v25OriginalAdminOpenTournamentPage = adminOpenTournamentPage;
+adminOpenTournamentPage = async function(tournamentId, focusResults=false){
+  window.__adminTournamentContext={
+    tournamentId:String(tournamentId),
+    focusResults:!!focusResults
+  };
+  return await _v25OriginalAdminOpenTournamentPage(tournamentId,focusResults);
+};
 
 /* =========================================================
    52. START
