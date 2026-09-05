@@ -6270,9 +6270,16 @@ async function loadAll(){
 
   await loadAllResults();
 
-  // Đồng bộ bracket loại trực tiếp ngay khi mở/tải lại giải.
-  // Không cần người dùng nhập lại kết quả Vòng 1.
-  await syncExistingDoubleEliminationBrackets();
+  // Chỉ khu vực quản trị mới được phép đồng bộ/materialize bracket.
+  // Người xem công khai chỉ đọc dữ liệu, tuyệt đối không ghi Supabase khi mở trang.
+  // Điều này cũng giúp danh sách/thông tin giải đấu luôn tải độc lập với engine bracket.
+  if (isAdmin()) {
+    try {
+      await syncExistingDoubleEliminationBrackets();
+    } catch (syncError) {
+      console.warn("Bỏ qua đồng bộ bracket khi tải dữ liệu:", syncError);
+    }
+  }
 
   applicationReady =
     true;
@@ -10839,10 +10846,14 @@ async function loadTournaments() {
 
   if (error) {
     console.error("loadTournaments:", error);
-    throw error;
+    // Không xoá dữ liệu đang có nếu lần refresh này gặp lỗi tạm thời.
+    if (!Array.isArray(tournaments) || !tournaments.length) {
+      throw error;
+    }
+    return;
   }
 
-  tournaments = data || [];
+  tournaments = Array.isArray(data) ? data : [];
 
   renderTournaments();
   renderTournamentSelect();
@@ -14363,6 +14374,7 @@ function adminOpenTournamentPage(tournamentId, focusResults=false){
   openModal("⚙️ Quản lý giải đấu",`<div class="admin-panel tournament-admin-page">
     <div class="chips"><span class="admin-role">${escapeHtml(adminRoleText())}</span>${currentAdmin.club_name?`<span class="chip">CLB: ${escapeHtml(currentAdmin.club_name)}</span>`:""}</div>
     <div class="actions">
+      <button class="btn btn-secondary" onclick="renderAdminTournamentManager()">← Quay lại quản trị</button>
       <button class="btn btn-secondary" onclick="renderAdminPanel()">⚙️ Tổng quan quản trị</button>
       <button class="btn btn-secondary" onclick="renderAdminTournamentManager('${esc(selected.id)}')">🏆 Danh sách giải</button>
       ${canCreateTournament() ? `<button class="btn btn-primary" onclick="openAdminCreateTournamentModal();">🏆 Tạo giải đấu</button>` : ""}
@@ -14380,6 +14392,10 @@ function adminOpenTournamentPage(tournamentId, focusResults=false){
 
 function renderAdminTournamentManager(selectedId=null){
   if(!isAdmin()){ openAdminPanel(); return; }
+  // Đang ở khu vực quản trị; X/đóng modal không được dùng để thay thế nút quay lại.
+  window.__adminTournamentContext = selectedId
+    ? { tournamentId: String(selectedId), focusResults: true }
+    : { tournamentId: null, focusResults: false };
   openModal("⚙️ Quản lý giải đấu",`<div class="admin-panel tournament-admin-page">
     <div class="chips"><span class="admin-role">${escapeHtml(adminRoleText())}</span>${currentAdmin.club_name?`<span class="chip">CLB: ${escapeHtml(currentAdmin.club_name)}</span>`:""}</div>
     <div class="actions"><button class="btn btn-secondary" onclick="renderAdminPanel()">⚙️ Tổng quan quản trị</button>${canCreateTournament() ? `<button class="btn btn-primary" onclick="openAdminCreateTournamentModal();">🏆 Tạo giải đấu</button>` : ""}<button class="btn btn-secondary" onclick="renderAdminRatingManager()">📊 Chấm trình</button><button class="btn btn-danger" onclick="adminLogout()">Đăng xuất</button></div>
@@ -14406,6 +14422,7 @@ async function renderAdminPanel(){
     openAdminPanel();
     return;
   }
+  window.__adminTournamentContext = null;
 
   const { data: assessments, error: assessmentError } = await supabaseClient
     .from("rating_assessments")
