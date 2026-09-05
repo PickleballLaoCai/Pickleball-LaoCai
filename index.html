@@ -20607,5 +20607,223 @@ window.paidRegs = window.paidRegs || function(tournamentId){
 })();
 </script>
 
+
+<script>
+/* =========================================================
+   PICKLEBALL LÀO CAI — FINAL RATING + TOURNAMENT CONTEXT FIX
+   2026-09
+   - Xác minh rating sau RPC bằng dữ liệu DB, không tin response rỗng.
+   - Nếu RPC không cập nhật rating: dùng admin_adjust_rating làm fallback
+     (không dùng .update() trực tiếp vì RLS có thể chặn).
+   - Không cập nhật lần 2 nếu RPC đã thay đổi DB.
+   - Đồng bộ select Kết quả khi người dùng mở giải khác.
+   - Xóa context kết quả cũ khi đổi giải.
+   - 5–20 đội ưu tiên chia bảng; >20 ưu tiên loại trực tiếp khi BTC tạo
+     lịch nếu giải chưa có trận.
+========================================================= */
+(function(){
+  'use strict';
+
+  const oldRating = window.updateRatingsAfterMatch;
+
+  function regMemberIds(reg){
+    if(!reg) return [];
+    const out=[];
+    ['member_id','member2_id','member_2_id','partner_member_id'].forEach(k=>{
+      const v=reg[k];
+      if(v!==null && v!==undefined && String(v)!=='' &&
+         !out.some(x=>String(x)===String(v))) out.push(v);
+    });
+    return out;
+  }
+
+  function memberIdsForMatch(match){
+    const a=typeof getMatchRegistration==='function' ? getMatchRegistration(match?.team_a) : null;
+    const b=typeof getMatchRegistration==='function' ? getMatchRegistration(match?.team_b) : null;
+    return [...new Set([...regMemberIds(a),...regMemberIds(b)].map(String))];
+  }
+
+  function syncLocalMembers(rows){
+    (rows||[]).forEach(row=>{
+      const m=(Array.isArray(window.members)?window.members:[]).find(x=>String(x.id)===String(row.id));
+      if(m){
+        if(row.rating!=null) m.rating=Number(row.rating);
+        if('rating_status' in row) m.rating_status=row.rating_status;
+        if('rating_confidence' in row) m.rating_confidence=row.rating_confidence;
+        if('matches_played' in row) m.matches_played=row.matches_played;
+        if('wins' in row) m.wins=row.wins;
+        if('losses' in row) m.losses=row.losses;
+      }
+    });
+    try{ if(typeof renderMembers==='function') renderMembers(); }catch(e){}
+    try{ if(typeof renderRatingSelect==='function') renderRatingSelect(); }catch(e){}
+    try{ if(typeof renderRanking==='function') renderRanking(); }catch(e){}
+  }
+
+  async function readRatings(ids){
+    if(!ids.length) return [];
+    const {data,error}=await supabaseClient
+      .from('members')
+      .select('id,rating,rating_status,rating_confidence,matches_played,wins,losses')
+      .in('id',ids);
+    if(error) throw error;
+    return data||[];
+  }
+
+  function ratingChanged(before,after){
+    const map=new Map((before||[]).map(x=>[String(x.id),Number(x.rating)]));
+    return (after||[]).some(x=>{
+      const b=map.get(String(x.id));
+      return Number.isFinite(b) && Math.abs(Number(x.rating)-b)>0.000001;
+    });
+  }
+
+  async function fallbackViaAdminAdjust(match,scoreA,scoreB,beforeRows){
+    const regA=typeof getMatchRegistration==='function'?getMatchRegistration(match?.team_a):null;
+    const regB=typeof getMatchRegistration==='function'?getMatchRegistration(match?.team_b):null;
+    const idsA=regMemberIds(regA), idsB=regMemberIds(regB);
+    if(!idsA.length || !idsB.length) throw new Error('Không xác định được VĐV của hai bên.');
+
+    const allBefore=beforeRows||await readRatings([...idsA,...idsB]);
+    const getR=id=>{
+      const x=allBefore.find(r=>String(r.id)===String(id));
+      return Number(x?.rating||1);
+    };
+
+    const avgA=idsA.reduce((sum,id)=>sum+getR(id),0)/idsA.length;
+    const avgB=idsB.reduce((sum,id)=>sum+getR(id),0)/idsB.length;
+    const calc=typeof calculateRatingDelta==='function'
+      ? calculateRatingDelta(avgA,avgB,Number(scoreA),Number(scoreB))
+      : {deltaA:Number(scoreA)>Number(scoreB)?0.05:-0.05,deltaB:Number(scoreA)>Number(scoreB)?-0.05:0.05};
+
+    const updates=[];
+    idsA.forEach(id=>{
+      const old=getR(id);
+      const next=Math.max(1,Math.min(5,old+Number(calc.deltaA||0)));
+      updates.push({id:Number(id),old,next,won:Number(scoreA)>Number(scoreB)});
+    });
+    idsB.forEach(id=>{
+      const old=getR(id);
+      const next=Math.max(1,Math.min(5,old+Number(calc.deltaB||0)));
+      updates.push({id:Number(id),old,next,won:Number(scoreB)>Number(scoreA)});
+    });
+
+    for(const u of updates){
+      const reason=`Cập nhật trình sau trận ${match.id}: ${scoreA}-${scoreB}.`;
+      const {data,error}=await supabaseClient.rpc('admin_adjust_rating',{
+        p_member_id:u.id,
+        p_new_rating:Number(u.next),
+        p_reason:reason
+      });
+      if(error) throw error;
+    }
+
+    const after=await readRatings(updates.map(x=>String(x.id)));
+    syncLocalMembers(after);
+    return {success:true,fallback:true,changes:after.map(x=>({member_id:x.id,new_rating:x.rating}))};
+  }
+
+  window.updateRatingsAfterMatch = async function(match,scoreA,scoreB){
+    const ids=memberIdsForMatch(match);
+    if(!ids.length) throw new Error('Không xác định được thành viên của trận đấu.');
+
+    /* Chụp rating trước trận để biết RPC thực sự có đổi DB hay không. */
+    let before=[];
+    try{ before=await readRatings(ids); }catch(e){ console.warn('Không đọc được rating trước trận:',e); }
+
+    let rpcResult=null, rpcError=null;
+    try{
+      if(typeof oldRating==='function') rpcResult=await oldRating(match,scoreA,scoreB);
+    }catch(e){
+      rpcError=e;
+      console.warn('apply_match_rating lỗi:',e);
+    }
+
+    /* Quan trọng: response RPC có thể rỗng dù DB đã đổi. Kiểm tra DB thật. */
+    let after=[];
+    try{ after=await readRatings(ids); }catch(e){ console.warn('Không đọc được rating sau RPC:',e); }
+
+    if(after.length && ratingChanged(before,after)){
+      syncLocalMembers(after);
+      return {success:true,changes:after.map(x=>({member_id:x.id,new_rating:x.rating}))};
+    }
+
+    /* Nếu RPC không làm DB thay đổi thì mới dùng fallback. */
+    const fallback=await fallbackViaAdminAdjust(match,scoreA,scoreB,before);
+    return fallback;
+  };
+
+  /* ---------- Đồng bộ giải đang xem với mục Kết quả ---------- */
+  function setResultTournamentContext(tournamentId){
+    const id=String(tournamentId||'');
+    const select=document.getElementById('resultTournamentSelect');
+    if(select){
+      const exists=[...select.options].some(o=>String(o.value)===id);
+      if(exists){
+        select.value=id;
+        try{ renderResults(); }catch(e){}
+      }
+    }
+    window.__activeResultTournamentId=id||null;
+  }
+
+  /* Bọc openTournament: khi chuyển giải, mục Kết quả cũng chuyển theo. */
+  const oldOpenTournament=window.openTournament;
+  if(typeof oldOpenTournament==='function'){
+    window.openTournament=async function(tournamentId){
+      setResultTournamentContext(tournamentId);
+      const result=await oldOpenTournament.apply(this,arguments);
+      setResultTournamentContext(tournamentId);
+      return result;
+    };
+  }
+
+  /* Bọc openTournamentDetail nếu được gọi từ quản trị/công khai. */
+  const oldOpenDetail=window.openTournamentDetail;
+  if(typeof oldOpenDetail==='function'){
+    window.openTournamentDetail=function(tournamentId){
+      setResultTournamentContext(tournamentId);
+      return oldOpenDetail.apply(this,arguments);
+    };
+  }
+
+  /* Bọc admin mở giải để không giữ giải cũ ở khu vực kết quả. */
+  const oldAdminOpen=window.adminOpenTournamentPage;
+  if(typeof oldAdminOpen==='function'){
+    window.adminOpenTournamentPage=async function(tournamentId){
+      setResultTournamentContext(tournamentId);
+      const r=await oldAdminOpen.apply(this,arguments);
+      setResultTournamentContext(tournamentId);
+      return r;
+    };
+  }
+
+  /* renderTournamentSelect: nếu giải đang xem đã đổi thì ưu tiên context hiện tại. */
+  const oldRenderSelect=window.renderTournamentSelect;
+  if(typeof oldRenderSelect==='function'){
+    window.renderTournamentSelect=function(){
+      const keep=window.__activeResultTournamentId;
+      oldRenderSelect.apply(this,arguments);
+      if(keep){
+        const select=document.getElementById('resultTournamentSelect');
+        if(select && [...select.options].some(o=>String(o.value)===String(keep))){
+          select.value=String(keep);
+        }
+      }
+    };
+  }
+
+  /* ---------- Luật chọn thể thức theo số đội ---------- */
+  window.pklRecommendedTournamentFormat=function(teamCount){
+    const n=Number(teamCount)||0;
+    if(n>=5 && n<=20) return 'group_stage';
+    if(n>20) return 'double_elimination';
+    return null;
+  };
+
+  console.log('Pickleball Lào Cai — RATING DB VERIFY + TOURNAMENT CONTEXT FIX installed.');
+})();
+</script>
+
 </body>
 </html>
