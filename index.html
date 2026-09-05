@@ -1919,6 +1919,40 @@ th{
 
 
 <!-- V16 AUDIT: Direct bracket engine isolated; existing rating/permission modules preserved. -->
+
+<style>
+/* FINAL admin controls */
+.pkl-admin-zoom-bar{
+  position:sticky;
+  top:0;
+  z-index:100;
+  display:flex;
+  align-items:center;
+  justify-content:flex-end;
+  gap:6px;
+  padding:7px 0 10px;
+  background:rgba(255,255,255,.96);
+  backdrop-filter:blur(6px);
+  border-bottom:1px solid #e7d6df;
+}
+.pkl-admin-zoom-bar button{
+  min-width:34px;
+  height:32px;
+  border:1px solid #cfe0d8;
+  border-radius:9px;
+  background:#eef8f3;
+  color:#075b39;
+  font-size:18px;
+  font-weight:900;
+  cursor:pointer;
+}
+.pkl-admin-zoom-bar button:hover{background:#dff1e9}
+.pkl-admin-zoom-value{min-width:52px;text-align:center;font-weight:900;color:#075b39}
+.tournament-admin-page .direct-bracket-scroll{
+  scrollbar-width:auto;
+}
+</style>
+
 </head>
 
 
@@ -20422,5 +20456,156 @@ window.paidRegs = window.paidRegs || function(tournamentId){
   console.log('Pickleball Lào Cai — FINAL DIRECT ENGINE 2026 installed.');
 })();
 </script>
+
+
+<script>
+/* =========================================================
+   PICKLEBALL LÀO CAI — FINAL UX + RATING SAFETY PATCH
+   Scope: rating fallback + admin zoom/navigation only.
+   Không thay engine bảng đấu/chia bảng/loại trực tiếp.
+========================================================= */
+(function(){
+  'use strict';
+
+  /* ---------- RATING: RPC first, local-admin fallback ---------- */
+  const _oldUpdateRatings = window.updateRatingsAfterMatch;
+
+  function regMembers(reg){
+    if(!reg) return [];
+    const ids=[];
+    ['member_id','member2_id','member_2_id','partner_member_id'].forEach(k=>{
+      if(reg[k]!=null && reg[k]!=='' && !ids.some(x=>String(x)===String(reg[k]))) ids.push(reg[k]);
+    });
+    return ids;
+  }
+
+  function findMember(id){
+    return (Array.isArray(window.members)?window.members:[]).find(m=>String(m.id)===String(id)) ||
+           (typeof memberById==='function'?memberById(id):null);
+  }
+
+  async function fallbackApplyRating(match, scoreA, scoreB){
+    const regA=typeof getMatchRegistration==='function'?getMatchRegistration(match.team_a):null;
+    const regB=typeof getMatchRegistration==='function'?getMatchRegistration(match.team_b):null;
+    const idsA=regMembers(regA), idsB=regMembers(regB);
+    if(!idsA.length || !idsB.length) throw new Error('Không xác định được VĐV của hai bên.');
+
+    const teamA=idsA.map(findMember).filter(Boolean);
+    const teamB=idsB.map(findMember).filter(Boolean);
+    if(!teamA.length || !teamB.length) throw new Error('Không tìm thấy VĐV trong danh sách thành viên.');
+
+    const avgA=teamA.reduce((s,m)=>s+Number(m.rating||1),0)/teamA.length;
+    const avgB=teamB.reduce((s,m)=>s+Number(m.rating||1),0)/teamB.length;
+    const d=typeof calculateRatingDelta==='function'
+      ?calculateRatingDelta(avgA,avgB,Number(scoreA),Number(scoreB))
+      :{deltaA:Number(scoreA)>Number(scoreB)?0.05:-0.05,deltaB:Number(scoreA)>Number(scoreB)?-0.05:0.05};
+
+    const updates=[];
+    for(const m of teamA){
+      const old=Number(m.rating||1), next=Math.max(1,Math.min(5,old+Number(d.deltaA||0)));
+      updates.push({member:m,old,next,won:Number(scoreA)>Number(scoreB)});
+    }
+    for(const m of teamB){
+      const old=Number(m.rating||1), next=Math.max(1,Math.min(5,old+Number(d.deltaB||0)));
+      updates.push({member:m,old,next,won:Number(scoreB)>Number(scoreA)});
+    }
+
+    for(const u of updates){
+      const payload={rating:u.next};
+      if('rating_status' in u.member) payload.rating_status='Đã xác thực';
+      const {error}=await supabaseClient.from('members').update(payload).eq('id',u.member.id);
+      if(error) throw error;
+      u.member.rating=u.next;
+      u.member.rating_status='Đã xác thực';
+    }
+
+    /* Thống kê trận chỉ chạy ở fallback, tránh cộng đôi khi RPC đã xử lý. */
+    if(typeof updateMemberMatchStats==='function'){
+      try{ await updateMemberMatchStats(match,scoreA,scoreB); }catch(e){ console.warn('Fallback member stats:',e); }
+    }
+
+    if(typeof renderMembers==='function') renderMembers();
+    if(typeof renderRatingSelect==='function') renderRatingSelect();
+    if(typeof renderRanking==='function') renderRanking();
+
+    return {success:true, fallback:true, changes:updates.map(u=>({member_id:u.member.id,new_rating:u.next}))};
+  }
+
+  window.updateRatingsAfterMatch = async function(match,scoreA,scoreB){
+    let rpcError=null;
+    let rpcResult=null;
+    try{
+      if(typeof _oldUpdateRatings==='function') rpcResult=await _oldUpdateRatings(match,scoreA,scoreB);
+      const changes=Array.isArray(rpcResult?.changes)?rpcResult.changes:[];
+      /* RPC phải trả thay đổi. Nếu không có, coi như chưa cập nhật. */
+      if(changes.length){
+        return rpcResult;
+      }
+      rpcError=new Error('RPC apply_match_rating không trả về thay đổi rating.');
+    }catch(e){
+      rpcError=e;
+      console.warn('apply_match_rating failed; dùng fallback:',e);
+    }
+
+    try{
+      const result=await fallbackApplyRating(match,scoreA,scoreB);
+      return result;
+    }catch(fallbackError){
+      console.error('Fallback rating failed:',fallbackError);
+      throw new Error('Không thể cập nhật điểm trình: '+(fallbackError.message||rpcError?.message||'lỗi không xác định'));
+    }
+  };
+
+  /* ---------- ADMIN ZOOM ---------- */
+  const ZOOM_KEY='pkl_admin_zoom';
+  const clamp=z=>Math.max(0.70,Math.min(1.30,Number(z)||1));
+
+  window.pklAdminSetZoom=function(value){
+    const z=clamp(value);
+    localStorage.setItem(ZOOM_KEY,String(z));
+    const page=document.querySelector('.tournament-admin-page');
+    if(page) page.style.zoom=String(z);
+    document.querySelectorAll('.pkl-admin-zoom-value').forEach(e=>e.textContent=Math.round(z*100)+'%');
+  };
+  window.pklAdminZoom=function(delta){
+    const current=Number(localStorage.getItem(ZOOM_KEY)||1);
+    window.pklAdminSetZoom(Math.round((current+delta)*100)/100);
+  };
+  window.pklAdminZoomReset=function(){window.pklAdminSetZoom(1);};
+
+  function installZoomBar(){
+    const page=document.querySelector('.tournament-admin-page');
+    if(!page || page.querySelector('.pkl-admin-zoom-bar')) return;
+    const bar=document.createElement('div');
+    bar.className='pkl-admin-zoom-bar';
+    bar.innerHTML=`<span>🔍</span><button type="button" onclick="pklAdminZoom(-0.10)" title="Thu nhỏ">−</button><span class="pkl-admin-zoom-value">100%</span><button type="button" onclick="pklAdminZoom(0.10)" title="Phóng to">+</button><button type="button" onclick="pklAdminZoomReset()" title="Đặt lại">↺</button>`;
+    page.prepend(bar);
+    window.pklAdminSetZoom(Number(localStorage.getItem(ZOOM_KEY)||1));
+  }
+
+  const _oldAdminOpen=window.adminOpenTournamentPage;
+  if(typeof _oldAdminOpen==='function'){
+    window.adminOpenTournamentPage=async function(){
+      const r=await _oldAdminOpen.apply(this,arguments);
+      setTimeout(installZoomBar,0);
+      return r;
+    };
+  }
+
+  /* Sticky horizontal scrollbar: không phải kéo xuống cuối workspace mới kéo được. */
+  function improveBracketScroll(){
+    document.querySelectorAll('.tournament-admin-page .direct-bracket-scroll').forEach(el=>{
+      el.style.position='sticky';
+      el.style.bottom='8px';
+      el.style.zIndex='8';
+      el.style.background='#fff';
+    });
+  }
+  const obs=new MutationObserver(()=>{installZoomBar();improveBracketScroll();});
+  obs.observe(document.body,{childList:true,subtree:true});
+  setTimeout(()=>{installZoomBar();improveBracketScroll();},300);
+})();
+</script>
+
 </body>
 </html>
