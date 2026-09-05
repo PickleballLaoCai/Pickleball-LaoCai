@@ -19739,7 +19739,23 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     </div>`;
   };
 
-  console.log("Pickleball Lào Cai — V34 display/result refresh installed.");
+  /* V34.2 compatibility: expose the V34 helper functions globally.
+     Legacy admin/result flows from older versions can call these helpers
+     by global name when reopening existing tournaments. */
+  window._tm = _tm;
+  window._paidRegs = _paidRegs;
+  window.paidRegs = _paidRegs;
+  window._currentSlots = _currentSlots;
+  window._pairKey = _pairKey;
+  window._isCompleted = _isCompleted;
+  if(typeof _displayStageOfMatch === "function") window._displayStageOfMatch = _displayStageOfMatch;
+  if(typeof _isGrandFinal === "function") window._isGrandFinal = _isGrandFinal;
+  if(typeof _internalRound === "function") window._internalRound = _internalRound;
+  if(typeof _v34StageCount === "function") window._v34StageCount = _v34StageCount;
+  if(typeof _v34StageLabel === "function") window._v34StageLabel = _v34StageLabel;
+  if(typeof _teamName === "function") window._teamName = _teamName;
+
+  console.log("Pickleball Lào Cai — V34.2 display/result refresh installed.");
 })();
 
 </script>
