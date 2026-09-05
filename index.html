@@ -6245,34 +6245,32 @@ async function syncExistingDoubleEliminationBrackets(){
 }
 
 async function loadAll(){
-
   /*
-    Thứ tự:
-
-    1. Thành viên
-    2. Giải đấu
-    3. Đăng ký
-    4. Trận đấu
-    5. Kết quả
-
-    Các hàm 2-5 sẽ được định nghĩa
-    ở PHẦN 3.
+    V31: tải dữ liệu độc lập.
+    Một bảng lỗi/quyền RLS không được làm mất toàn bộ website.
+    Mục tiêu: người ngoài vẫn xem được Giải đấu/Thành viên nếu một
+    nguồn dữ liệu khác đang tạm lỗi.
   */
+  const loaders = [
+    ["members", loadMembers],
+    ["tournaments", loadTournaments],
+    ["registrations", loadAllRegistrations],
+    ["matches", loadAllMatches],
+    ["results", loadAllResults]
+  ];
 
+  const errors = [];
 
-  await loadMembers();
+  for (const [name, loader] of loaders) {
+    try {
+      await loader();
+    } catch (error) {
+      errors.push({name, error});
+      console.error(`loadAll/${name}:`, error);
+    }
+  }
 
-  await loadTournaments();
-
-  await loadAllRegistrations();
-
-  await loadAllMatches();
-
-  await loadAllResults();
-
-  // Chỉ khu vực quản trị mới được phép đồng bộ/materialize bracket.
-  // Người xem công khai chỉ đọc dữ liệu, tuyệt đối không ghi Supabase khi mở trang.
-  // Điều này cũng giúp danh sách/thông tin giải đấu luôn tải độc lập với engine bracket.
+  /* Chỉ khu vực quản trị mới được phép đồng bộ/materialize bracket. */
   if (isAdmin()) {
     try {
       await syncExistingDoubleEliminationBrackets();
@@ -6281,11 +6279,17 @@ async function loadAll(){
     }
   }
 
-  applicationReady =
-    true;
+  applicationReady = true;
 
+  if (errors.length) {
+    console.warn(
+      "Một hoặc nhiều nguồn dữ liệu không tải được:",
+      errors.map(x => x.name)
+    );
+  }
+
+  return {ok: errors.length === 0, errors};
 }
-
 
 /* =========================================================
    29. HẾT PHẦN 2/4
@@ -16566,12 +16570,39 @@ function _v26RatingSearchRender(){
   const qName = String(input.value || "").trim().toLowerCase();
   const qPhone = String(phone.value || "").replace(/\D/g,"");
 
+  let pool = [...(members || [])].sort((a,b)=>{
+    const rd = numberValue(b.rating,1) - numberValue(a.rating,1);
+    if(rd !== 0) return rd;
+    return String(a.full_name||"").localeCompare(String(b.full_name||""),"vi");
+  });
+
+  /* Nếu nhập đủ tên + SĐT và chỉ có đúng một người khớp,
+     tự chọn để tránh lỗi "Vui lòng chọn thành viên". */
+  if(qName && qPhone){
+    const exact = pool.filter(m=>{
+      const name = String(m.full_name || "").trim().toLowerCase();
+      const ph = String(m.phone || "").replace(/\D/g,"");
+      return name === qName && ph === qPhone;
+    });
+    if(exact.length === 1){
+      selectRatingMemberV26(exact[0].id);
+      return;
+    }
+  }
+
+  let results;
   if(!qName && !qPhone){
-    box.innerHTML = `<div class="muted">Nhập tên hoặc số điện thoại để tìm thành viên.</div>`;
+    /* Không tải hàng nghìn người vào dropdown/DOM.
+       Chỉ hiển thị Top 20 theo trình để người dùng có thể chọn nhanh. */
+    results = pool.slice(0,20);
+    box.innerHTML = results.length
+      ? `<div class="muted">Top 20 thành viên theo trình — nhập tên hoặc SĐT để tìm chính xác.</div>` +
+        results.map(m=>_v26RatingMemberResultHtml(m, hidden.value)).join("")
+      : `<div class="empty">Chưa có thành viên.</div>`;
     return;
   }
 
-  const results = (members || []).filter(m=>{
+  results = pool.filter(m=>{
     const name = String(m.full_name || "").toLowerCase();
     const ph = String(m.phone || "").replace(/\D/g,"");
     const nameOk = !qName || name.includes(qName);
@@ -16584,18 +16615,22 @@ function _v26RatingSearchRender(){
     return;
   }
 
-  box.innerHTML = results.map(m=>{
-    const selected = String(hidden.value)===String(m.id);
-    return `<button type="button"
-      class="rating-member-result ${selected?"selected":""}"
-      style="width:100%;text-align:left;border:1px solid #e8bfd3;background:#fff;border-radius:10px;padding:9px 11px;margin-top:7px;cursor:pointer"
-      onclick="selectRatingMemberV26('${esc(m.id)}')">
-      <b>${escapeHtml(m.full_name || "Không tên")}</b>
-      <span class="muted"> · ${escapeHtml(m.phone || "Chưa có SĐT")}</span>
-      <span class="chip" style="float:right">Trình ${formatRating(m.rating)}</span>
-      ${m.club ? `<div class="muted" style="margin-top:3px">${escapeHtml(m.club)}</div>` : ""}
-    </button>`;
-  }).join("");
+  box.innerHTML =
+    `<div class="muted">Tìm thấy ${results.length > 20 ? "20+" : results.length} kết quả, sắp xếp theo trình cao xuống thấp.</div>` +
+    results.map(m=>_v26RatingMemberResultHtml(m, hidden.value)).join("");
+}
+
+function _v26RatingMemberResultHtml(m, selectedId){
+  const selected = String(selectedId)===String(m.id);
+  return `<button type="button"
+    class="rating-member-result ${selected?"selected":""}"
+    style="width:100%;text-align:left;border:1px solid #e8bfd3;background:#fff;border-radius:10px;padding:9px 11px;margin-top:7px;cursor:pointer"
+    onclick="selectRatingMemberV26('${esc(m.id)}')">
+    <b>${escapeHtml(m.full_name || "Không tên")}</b>
+    <span class="muted"> · ${escapeHtml(m.phone || "Chưa có SĐT")}</span>
+    <span class="chip" style="float:right">Trình ${formatRating(m.rating)}</span>
+    ${m.club ? `<div class="muted" style="margin-top:3px">${escapeHtml(m.club)}</div>` : ""}
+  </button>`;
 }
 
 function selectRatingMemberV26(memberId){
@@ -17639,6 +17674,54 @@ loadCurrentAdmin=async function(){
   _v27ApplyTournamentCreateVisibility();
 };
 
+
+
+/* =========================================================
+   V31 — HARDEN DỮ LIỆU CÔNG KHAI + CHỌN THÀNH VIÊN
+========================================================= */
+
+/* Nếu loadMembers lỗi, các nguồn khác vẫn phải được render. */
+const _v31OriginalInitializeApplication = initializeApplication;
+initializeApplication = async function(){
+  if(applicationReady) return;
+
+  try{
+    if(typeof updateRatingPreview === "function") updateRatingPreview();
+    if(typeof refreshCompetitionChoices === "function") refreshCompetitionChoices();
+    if(typeof refreshTournamentFormatChoices === "function") refreshTournamentFormatChoices();
+
+    await initAuth();
+
+    await loadAll();
+
+    try{ fillFeedbackTargets(); }catch(e){ console.warn("fillFeedbackTargets:",e); }
+    try{ await loadRatingFeedback(); }catch(e){ console.warn("loadRatingFeedback:",e); }
+
+    try{ renderMembers(); }catch(e){ console.warn("renderMembers:",e); }
+    try{ renderTournaments(); }catch(e){ console.warn("renderTournaments:",e); }
+    try{ renderTournamentSelect(); }catch(e){ console.warn("renderTournamentSelect:",e); }
+    try{ renderResultMatches(); }catch(e){ console.warn("renderResultMatches:",e); }
+    try{ renderResults(); }catch(e){ console.warn("renderResults:",e); }
+    try{ renderRanking(); }catch(e){ console.warn("renderRanking:",e); }
+    try{ renderRatingSelect(); }catch(e){ console.warn("renderRatingSelect:",e); }
+
+    applicationReady = true;
+    console.log("Pickleball Lào Cai — đã sẵn sàng (V31).");
+  }catch(error){
+    console.error("initializeApplication V31:",error);
+    showToast("Không thể khởi tạo giao diện. Kiểm tra kết nối Supabase.");
+  }
+};
+
+/* Cho phép nút chọn thành viên hoạt động ổn định kể cả sau refresh. */
+document.addEventListener("click", function(event){
+  const btn = event.target.closest?.(".rating-member-result");
+  if(!btn) return;
+  event.stopPropagation();
+});
+
+/* Khi người dùng nhập chính xác tên + SĐT, nếu chỉ có một người khớp
+   thì hidden ratingMember đã được chọn bởi _v26RatingSearchRender. */
 
 /* =========================================================
    52. START
