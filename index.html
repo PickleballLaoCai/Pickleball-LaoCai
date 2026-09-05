@@ -6126,185 +6126,115 @@ function teamRating(
    26. CẬP NHẬT RATING SAU TRẬN
 ========================================================= */
 
-async function updateRatingsAfterMatch(
-  match,
-  scoreA,
-  scoreB
-){
-
-  /*
-   * RATING SAU TRẬN — GIỮ NGUYÊN CÔNG THỨC V34.10.
-   *
-   * Thứ tự:
-   * 1) Thử RPC apply_match_rating nếu DB đã có hàm này.
-   * 2) Nếu RPC không trả changes, kiểm tra DB xem rating có thực sự đổi chưa.
-   * 3) Nếu chưa đổi, cập nhật trực tiếp members + rating_history.
-   *
-   * Quan trọng: không gọi updateMemberMatchStats() tại đây.
-   * submitMatchResult() gọi thống kê thắng/thua riêng để tránh cộng 2 lần.
-   */
-
+async function updateRatingsAfterMatch(match, scoreA, scoreB){
   if(!match || !match.id) throw new Error("Thiếu trận đấu để cập nhật rating.");
+  if(match.status === "bye" || match.__bye || !match.team_a || !match.team_b) return {success:true, skipped:true};
 
-  const regA = getMatchRegistration(match.team_a);
-  const regB = getMatchRegistration(match.team_b);
+  const regA=getMatchRegistration(match.team_a);
+  const regB=getMatchRegistration(match.team_b);
+  const idsA=getRegistrationMembers(regA||{}).map(String).filter(Boolean);
+  const idsB=getRegistrationMembers(regB||{}).map(String).filter(Boolean);
+  const allIds=[...new Set([...idsA,...idsB])];
+  if(!idsA.length || !idsB.length) throw new Error("Không xác định đủ VĐV của hai bên.");
 
-  const idsA = getRegistrationMembers(regA || {});
-  const idsB = getRegistrationMembers(regB || {});
+  /* Đọc rating mới nhất từ DB, không dùng cache cũ. */
+  const {data:dbMembers,error:dbReadError}=await supabaseClient
+    .from("members")
+    .select("id,full_name,rating,rating_status,rating_confidence,matches_played,wins,losses")
+    .in("id",allIds.map(Number));
+  if(dbReadError) throw dbReadError;
 
-  const allIds = [...new Set([...idsA, ...idsB].map(String))];
-  if(!idsA.length || !idsB.length){
-    throw new Error("Không xác định đủ VĐV của hai bên để cập nhật rating.");
-  }
+  const fresh=new Map((dbMembers||[]).map(m=>[String(m.id),m]));
+  const teamA=idsA.map(id=>fresh.get(id)||memberById(id)).filter(Boolean);
+  const teamB=idsB.map(id=>fresh.get(id)||memberById(id)).filter(Boolean);
+  if(!teamA.length || !teamB.length) throw new Error("Không tìm thấy thành viên của hai bên.");
 
-  /* Chụp rating trước trận để phát hiện trường hợp RPC đã cập nhật nhưng không trả changes. */
-  const before = {};
-  for(const id of allIds){
-    const m = memberById(id);
-    if(m) before[String(id)] = Number(m.rating ?? 1);
-  }
+  const before={};
+  allIds.forEach(id=>{ const m=fresh.get(String(id))||memberById(id); if(m) before[String(id)]=Number(m.rating??1); });
 
-  /* ---------- 1. RPC hiện hữu ---------- */
+  /* 1) RPC chuẩn. */
+  let rpcWorked=false;
+  let rpcData=null;
   try{
-    const {data,error} = await supabaseClient.rpc(
-      "apply_match_rating",
-      {p_match_id: match.id}
-    );
-
+    const {data,error}=await supabaseClient.rpc("apply_match_rating",{p_match_id:match.id});
     if(!error){
-      const changes = Array.isArray(data?.changes) ? data.changes : [];
-
-      if(changes.length){
-        changes.forEach(change=>{
-          const member = memberById(change.member_id);
-          if(!member) return;
-          member.rating = Number(change.new_rating);
-          member.rating_status = "Đã xác thực";
-          if(change.rating_confidence != null) member.rating_confidence = Number(change.rating_confidence);
-          if(change.matches_played != null) member.matches_played = Number(change.matches_played);
-          if(change.wins != null) member.wins = Number(change.wins);
-          if(change.losses != null) member.losses = Number(change.losses);
-        });
-        renderMembers();
-        renderRatingSelect();
-        renderRanking();
-        return {success:true, changes, source:"rpc"};
-      }
-
-      /* RPC không trả changes: đọc lại DB để xem nó có thực sự cập nhật không. */
-      const {data:rows, error:readError} = await supabaseClient
+      rpcData=data;
+      /* Không tin vào payload changes; đọc DB lại là nguồn xác nhận. */
+      const {data:after,error:afterError}=await supabaseClient
         .from("members")
-        .select("id,rating,rating_status,rating_confidence,matches_played,wins,losses")
-        .in("id", allIds.map(Number));
-
-      if(!readError && Array.isArray(rows) && rows.length){
-        const changedRows = rows.filter(row =>
-          before[String(row.id)] !== undefined &&
-          Math.abs(Number(row.rating ?? 1) - before[String(row.id)]) > 0.000001
-        );
-
-        if(changedRows.length){
-          changedRows.forEach(row=>{
-            const member = memberById(row.id);
-            if(!member) return;
-            Object.assign(member, row);
-          });
-          renderMembers();
-          renderRatingSelect();
-          renderRanking();
-          return {
-            success:true,
-            changes:changedRows.map(row=>({
-              member_id:row.id,
-              new_rating:Number(row.rating)
-            })),
-            source:"rpc-db-readback"
-          };
+        .select("id,full_name,rating,rating_status,rating_confidence,matches_played,wins,losses")
+        .in("id",allIds.map(Number));
+      if(!afterError && Array.isArray(after)){
+        const changed=after.filter(m=>before[String(m.id)]!==undefined && Math.abs(Number(m.rating??1)-before[String(m.id)])>0.000001);
+        if(changed.length){
+          changed.forEach(row=>{ const local=memberById(row.id); if(local) Object.assign(local,row); });
+          rpcWorked=true;
         }
       }
-    }else{
-      console.warn("apply_match_rating không chạy được, chuyển sang cập nhật rating trực tiếp:", error);
+    }else console.warn("apply_match_rating:",error.message||error);
+  }catch(e){ console.warn("apply_match_rating exception:",e); }
+
+  /* 2) Nếu RPC không thực sự đổi DB, dùng RPC quản trị chính thức.
+        RPC này cũng ghi rating_history với đúng lý do 'Cập nhật sau trận đấu'. */
+  if(!rpcWorked){
+    const avgA=teamA.reduce((s,m)=>s+Number(m.rating??1),0)/teamA.length;
+    const avgB=teamB.reduce((s,m)=>s+Number(m.rating??1),0)/teamB.length;
+    const d=calculateRatingDelta(avgA,avgB,Number(scoreA),Number(scoreB));
+    const targets=[];
+    teamA.forEach(m=>targets.push({m,delta:Number(d.deltaA||0)}));
+    teamB.forEach(m=>targets.push({m,delta:Number(d.deltaB||0)}));
+
+    for(const x of targets){
+      const old=Number(x.m.rating??1);
+      const next=Number(Math.max(1,Math.min(5,old+x.delta)).toFixed(2));
+      if(Math.abs(next-old)<0.000001) continue;
+
+      let adjusted=false;
+      try{
+        const {data,error}=await supabaseClient.rpc("admin_adjust_rating",{
+          p_member_id:Number(x.m.id),
+          p_new_rating:next,
+          p_reason:"Cập nhật sau trận đấu"
+        });
+        if(!error){
+          const local=memberById(x.m.id);
+          if(local){
+            local.rating=Number(data?.new_rating ?? next);
+            local.rating_status="Đã xác thực";
+          }
+          adjusted=true;
+        }else console.warn("admin_adjust_rating:",error.message||error);
+      }catch(e){ console.warn("admin_adjust_rating exception:",e); }
+
+      /* Cuối cùng mới thử update trực tiếp; history được ghi cùng reason. */
+      if(!adjusted){
+        const {error:updateError}=await supabaseClient.from("members").update({rating:next,rating_status:"Đã xác thực"}).eq("id",x.m.id);
+        if(updateError) throw updateError;
+        const {error:historyError}=await supabaseClient.from("rating_history").insert({
+          member_id:Number(x.m.id),old_rating:old,new_rating:next,change:Number((next-old).toFixed(2)),
+          reason:"Cập nhật sau trận đấu",source:"elo_match",created_at:new Date().toISOString()
+        });
+        if(historyError) console.warn("rating_history:",historyError.message||historyError);
+        const local=memberById(x.m.id); if(local){local.rating=next;local.rating_status="Đã xác thực";}
+      }
     }
-  }catch(rpcError){
-    console.warn("apply_match_rating exception, chuyển sang cập nhật rating trực tiếp:", rpcError);
   }
 
-  /* ---------- 2. Fallback chắc chắn ---------- */
-  const teamMembersA = idsA.map(memberById).filter(Boolean);
-  const teamMembersB = idsB.map(memberById).filter(Boolean);
-
-  if(!teamMembersA.length || !teamMembersB.length){
-    throw new Error("Không tìm thấy thành viên tương ứng với đăng ký của trận đấu.");
+  /* Đồng bộ lại toàn bộ dữ liệu rating từ DB sau cùng. */
+  const {data:finalRows,error:finalError}=await supabaseClient
+    .from("members")
+    .select("id,rating,rating_status,rating_confidence,matches_played,wins,losses")
+    .in("id",allIds.map(Number));
+  if(finalError) throw finalError;
+  const changedFinal=(finalRows||[]).filter(m=>before[String(m.id)]!==undefined && Math.abs(Number(m.rating??1)-before[String(m.id)])>0.000001);
+  if(!changedFinal.length){
+    throw new Error("Đã lưu kết quả nhưng DB chưa thay đổi điểm trình.");
   }
-
-  const avgA = teamMembersA.reduce((sum,m)=>sum + Number(m.rating ?? 1),0) / teamMembersA.length;
-  const avgB = teamMembersB.reduce((sum,m)=>sum + Number(m.rating ?? 1),0) / teamMembersB.length;
-  const delta = calculateRatingDelta(avgA,avgB,Number(scoreA),Number(scoreB));
-
-  const changes=[];
-  const now = new Date().toISOString();
-
-  const makeChange = (member, sideDelta, won) => {
-    const oldRating = Number(member.rating ?? 1);
-    const newRating = Number(Math.max(1,Math.min(5,oldRating + Number(sideDelta || 0))).toFixed(2));
-    return {
-      member,
-      oldRating,
-      newRating,
-      change:Number((newRating-oldRating).toFixed(2)),
-      won
-    };
-  };
-
-  teamMembersA.forEach(m=>changes.push(makeChange(m,delta.deltaA,Number(scoreA)>Number(scoreB))));
-  teamMembersB.forEach(m=>changes.push(makeChange(m,delta.deltaB,Number(scoreB)>Number(scoreA))));
-
-  for(const c of changes){
-    const {error:updateError} = await supabaseClient
-      .from("members")
-      .update({
-        rating:c.newRating,
-        rating_status:"Đã xác thực"
-      })
-      .eq("id",c.member.id);
-
-    if(updateError) throw updateError;
-
-    /* Lịch sử rating: lỗi lịch sử không được phép hoàn tác điểm đã lưu. */
-    const {error:historyError} = await supabaseClient
-      .from("rating_history")
-      .insert({
-        member_id:Number(c.member.id),
-        old_rating:c.oldRating,
-        new_rating:c.newRating,
-        change:c.change,
-        reason:"Cập nhật sau trận đấu",
-        source:"elo_match",
-        created_at:now
-      });
-
-    if(historyError){
-      console.warn("Không ghi được lịch sử rating:",historyError);
-    }
-
-    c.member.rating=c.newRating;
-    c.member.rating_status="Đã xác thực";
-  }
-
-  renderMembers();
-  renderRatingSelect();
-  renderRanking();
-
-  return {
-    success:true,
-    changes:changes.map(c=>({
-      member_id:c.member.id,
-      old_rating:c.oldRating,
-      new_rating:c.newRating,
-      change:c.change
-    })),
-    source:"direct-fallback"
-  };
+  changedFinal.forEach(row=>{const local=memberById(row.id);if(local)Object.assign(local,row);});
+  if(typeof renderMembers==='function') renderMembers();
+  if(typeof renderRatingSelect==='function') renderRatingSelect();
+  if(typeof renderRanking==='function') renderRanking();
+  return {success:true,source:rpcWorked?"apply_match_rating":"rating_fallback",changes:changedFinal};
 }
 
 /* =========================================================
