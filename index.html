@@ -2720,7 +2720,7 @@ th{
   <div class="grid-2">
 
 
-    <div class="card" id="tournamentCreateCard">
+    <div class="card" id="tournamentCreateCard" style="display:none !important">
 
       <h3>
         + Tạo giải đấu
@@ -14364,6 +14364,7 @@ function adminOpenTournamentPage(tournamentId, focusResults=false){
     <div class="actions">
       <button class="btn btn-secondary" onclick="renderAdminPanel()">⚙️ Tổng quan quản trị</button>
       <button class="btn btn-secondary" onclick="renderAdminTournamentManager('${esc(selected.id)}')">🏆 Danh sách giải</button>
+      ${canCreateTournament() ? `<button class="btn btn-primary" onclick="openAdminCreateTournamentModal();">🏆 Tạo giải đấu</button>` : ""}
       <button class="btn btn-secondary" onclick="renderAdminRatingManager()">📊 Chấm trình</button>
       <button class="btn btn-danger" onclick="adminLogout()">Đăng xuất</button>
     </div>
@@ -14380,7 +14381,7 @@ function renderAdminTournamentManager(selectedId=null){
   if(!isAdmin()){ openAdminPanel(); return; }
   openModal("⚙️ Quản lý giải đấu",`<div class="admin-panel tournament-admin-page">
     <div class="chips"><span class="admin-role">${escapeHtml(adminRoleText())}</span>${currentAdmin.club_name?`<span class="chip">CLB: ${escapeHtml(currentAdmin.club_name)}</span>`:""}</div>
-    <div class="actions"><button class="btn btn-secondary" onclick="renderAdminPanel()">⚙️ Tổng quan quản trị</button><button class="btn btn-secondary" onclick="renderAdminRatingManager()">📊 Chấm trình</button><button class="btn btn-danger" onclick="adminLogout()">Đăng xuất</button></div>
+    <div class="actions"><button class="btn btn-secondary" onclick="renderAdminPanel()">⚙️ Tổng quan quản trị</button>${canCreateTournament() ? `<button class="btn btn-primary" onclick="openAdminCreateTournamentModal();">🏆 Tạo giải đấu</button>` : ""}<button class="btn btn-secondary" onclick="renderAdminRatingManager()">📊 Chấm trình</button><button class="btn btn-danger" onclick="adminLogout()">Đăng xuất</button></div>
     <h4>🏆 Các giải đấu</h4>${_adminTournamentRowsHtml()}
   </div>`);
   const box=document.getElementById("modal")?.querySelector(".modal-box"); if(box) box.classList.add("tournament-admin-fullscreen");
@@ -14490,6 +14491,7 @@ async function renderAdminPanel(){
 
       <div class="actions">
         <button class="btn btn-secondary" onclick="renderAdminTournamentManager();">🏆 Quản lý giải</button>
+        ${canCreateTournament() ? `<button class="btn btn-primary" onclick="openAdminCreateTournamentModal();">🏆 Tạo giải đấu</button>` : ""}
         <button class="btn btn-secondary" onclick="renderAdminRatingManager();">📊 Chấm trình</button>
         <button class="btn btn-danger" onclick="adminLogout()">Đăng xuất</button>
       </div>
@@ -17515,3 +17517,131 @@ startAutoRefresh();
 
 </body>
 </html>
+
+
+/* =========================================================
+   V28 — KHU VỰC TẠO GIẢI CHỈ DÀNH CHO QUẢN TRỊ / CHỦ CLB
+   - Người dùng công khai không thấy form tạo giải.
+   - Chủ CLB / Quản trị thấy nút "Tạo giải đấu" trong khu vực quản trị.
+   - Dùng cùng form và cùng logic tạo giải cũ, không thay đổi schema.
+========================================================= */
+
+function _v28HidePublicTournamentCreate(){
+  const card=document.getElementById("tournamentCreateCard");
+  if(card) card.style.setProperty("display","none","important");
+}
+
+function _v28CreateFormHtml(){
+  const source=document.getElementById("tournamentCreateCard");
+  if(!source) return `<div class="empty">Không tìm thấy biểu mẫu tạo giải.</div>`;
+  return `<div class="card" id="adminTournamentCreateCard">${source.innerHTML.replace(/id="tournamentForm"/,'id="adminTournamentForm"')}</div>`;
+}
+
+function _v28Field(form,id){
+  return form?.querySelector("#"+id);
+}
+function _v28Radio(form,name,fallback){
+  return form?.querySelector(`input[name="${name}"]:checked`)?.value || fallback;
+}
+
+function _v28BindCreateFormUi(form){
+  if(!form || form.dataset.v28Bound==="1") return;
+  form.dataset.v28Bound="1";
+  const singles=form.querySelector("#singlesChoice");
+  const doubles=form.querySelector("#doublesChoice");
+  const group=form.querySelector("#groupChoice");
+  const direct=form.querySelector("#directChoice");
+  form.querySelectorAll('input[name="competitionType"]').forEach(x=>x.addEventListener("change",()=>{
+    const v=_v28Radio(form,"competitionType","singles");
+    singles?.classList.toggle("selected",v==="singles");
+    doubles?.classList.toggle("selected",v==="doubles");
+  }));
+  form.querySelectorAll('input[name="tournamentFormat"]').forEach(x=>x.addEventListener("change",()=>{
+    const v=_v28Radio(form,"tournamentFormat","double_elimination");
+    group?.classList.toggle("selected",v==="group_stage");
+    direct?.classList.toggle("selected",v==="double_elimination");
+  }));
+  const poster=_v28Field(form,"tourPoster"), preview=_v28Field(form,"tourPreview");
+  poster?.addEventListener("change",()=>{
+    const file=poster.files?.[0];
+    if(!preview) return;
+    if(!file){ preview.classList.add("hidden"); preview.removeAttribute("src"); return; }
+    preview.src=URL.createObjectURL(file);
+    preview.classList.remove("hidden");
+  });
+  form.addEventListener("submit",_v28HandleCreateTournamentSubmit);
+}
+
+async function _v28HandleCreateTournamentSubmit(event){
+  event.preventDefault();
+  const form=event.currentTarget;
+  if(!canCreateTournament()){
+    showToast("Chỉ Chủ tịch CLB hoặc Quản trị mới được tạo giải.");
+    return;
+  }
+  const button=form.querySelector('button[type="submit"]');
+  if(button) button.disabled=true;
+  try{
+    const name=_v28Field(form,"tourName")?.value.trim()||"";
+    if(!name){ showToast("Vui lòng nhập tên giải."); return; }
+    const competitionType=_v28Radio(form,"competitionType","singles");
+    const tournamentFormat=_v28Radio(form,"tournamentFormat","double_elimination");
+    const date=_v28Field(form,"tourDate")?.value||"";
+    const time=_v28Field(form,"tourTime")?.value||"";
+    const place=_v28Field(form,"tourPlace")?.value.trim()||"";
+    const ratingLimitRaw=_v28Field(form,"tourRatingLimit")?.value||"";
+    const maxTeamsRaw=_v28Field(form,"tourMaxTeams")?.value||"";
+    const deadline=_v28Field(form,"tourDeadline")?.value||"";
+    const description=_v28Field(form,"tourDescription")?.value.trim()||"";
+    const posterFile=_v28Field(form,"tourPoster")?.files?.[0];
+    let tournamentDate=null;
+    if(date) tournamentDate=time?`${date}T${time}:00`:`${date}T00:00:00`;
+    let posterUrl=null;
+    if(posterFile) posterUrl=await uploadToBucket("tournament-media",posterFile,"posters");
+    const payload={
+      name,
+      event_date:tournamentDate,
+      location:place||null,
+      format:tournamentFormat,
+      competition_type:competitionType,
+      rating_limit:ratingLimitRaw?Number(ratingLimitRaw):null,
+      max_teams:maxTeamsRaw?Number(maxTeamsRaw):null,
+      registration_deadline:deadline?new Date(deadline).toISOString():null,
+      status:"open",
+      description:description||null,
+      poster_url:posterUrl,
+      created_by:currentSession?.user?.id||null
+    };
+    const {data,error}=await supabaseClient.from("tournaments").insert(payload).select().single();
+    if(error) throw error;
+    tournaments=[data,...tournaments];
+    currentTournamentId=data.id;
+    await loadAllRegistrations();
+    await loadAllMatches();
+    renderTournaments();
+    renderTournamentSelect();
+    closeModal();
+    await renderAdminTournamentManager(data.id);
+    showToast("Đã tạo giải đấu thành công.");
+  }catch(error){
+    console.error("V28 CREATE TOURNAMENT ERROR:",error);
+    showToast("Không thể tạo giải đấu: "+(error?.message||"Lỗi không xác định"));
+  }finally{
+    if(button) button.disabled=false;
+  }
+}
+
+function openAdminCreateTournamentModal(){
+  if(!isAdmin() || !canCreateTournament()){
+    showToast("Tài khoản chưa được cấp quyền tạo giải đấu.");
+    return;
+  }
+  _v28HidePublicTournamentCreate();
+  openModal("🏆 Tạo giải đấu",`<div class="admin-panel">${_v28CreateFormHtml()}</div>`);
+  const form=document.getElementById("adminTournamentForm");
+  _v28BindCreateFormUi(form);
+}
+
+/* Luôn ẩn form công khai, kể cả trước khi renderTournaments chạy. */
+_v28HidePublicTournamentCreate();
+
