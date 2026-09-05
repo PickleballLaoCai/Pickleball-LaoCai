@@ -6133,37 +6133,163 @@ async function updateRatingsAfterMatch(
 ){
 
   /*
-    Rating sau trận được thực hiện bằng RPC bảo mật trên Supabase.
-    Người dùng/CLB không thể tự update members.rating trực tiếp.
-  */
-  const { data, error } =
-    await supabaseClient.rpc(
-      "apply_match_rating",
-      { p_match_id: match.id }
-    );
+   * RATING SAU TRẬN — GIỮ NGUYÊN CÔNG THỨC V34.10.
+   *
+   * Thứ tự:
+   * 1) Thử RPC apply_match_rating nếu DB đã có hàm này.
+   * 2) Nếu RPC không trả changes, kiểm tra DB xem rating có thực sự đổi chưa.
+   * 3) Nếu chưa đổi, cập nhật trực tiếp members + rating_history.
+   *
+   * Quan trọng: không gọi updateMemberMatchStats() tại đây.
+   * submitMatchResult() gọi thống kê thắng/thua riêng để tránh cộng 2 lần.
+   */
 
-  if(error){
-    throw error;
+  if(!match || !match.id) throw new Error("Thiếu trận đấu để cập nhật rating.");
+
+  const regA = getMatchRegistration(match.team_a);
+  const regB = getMatchRegistration(match.team_b);
+
+  const idsA = getRegistrationMembers(regA || {});
+  const idsB = getRegistrationMembers(regB || {});
+
+  const allIds = [...new Set([...idsA, ...idsB].map(String))];
+  if(!idsA.length || !idsB.length){
+    throw new Error("Không xác định đủ VĐV của hai bên để cập nhật rating.");
   }
 
-  /*
-    Đồng bộ local cache theo kết quả server.
-  */
-  const changes = Array.isArray(data?.changes)
-    ? data.changes
-    : [];
+  /* Chụp rating trước trận để phát hiện trường hợp RPC đã cập nhật nhưng không trả changes. */
+  const before = {};
+  for(const id of allIds){
+    const m = memberById(id);
+    if(m) before[String(id)] = Number(m.rating ?? 1);
+  }
 
-  changes.forEach(change => {
-    const member = memberById(change.member_id);
-    if(!member) return;
+  /* ---------- 1. RPC hiện hữu ---------- */
+  try{
+    const {data,error} = await supabaseClient.rpc(
+      "apply_match_rating",
+      {p_match_id: match.id}
+    );
 
-    member.rating = Number(change.new_rating);
-    member.rating_status = "Đã xác thực";
-    member.rating_confidence = Number(change.rating_confidence ?? member.rating_confidence ?? 0.5);
-    member.matches_played = Number(change.matches_played ?? member.matches_played ?? 0);
-    member.wins = Number(change.wins ?? member.wins ?? 0);
-    member.losses = Number(change.losses ?? member.losses ?? 0);
-  });
+    if(!error){
+      const changes = Array.isArray(data?.changes) ? data.changes : [];
+
+      if(changes.length){
+        changes.forEach(change=>{
+          const member = memberById(change.member_id);
+          if(!member) return;
+          member.rating = Number(change.new_rating);
+          member.rating_status = "Đã xác thực";
+          if(change.rating_confidence != null) member.rating_confidence = Number(change.rating_confidence);
+          if(change.matches_played != null) member.matches_played = Number(change.matches_played);
+          if(change.wins != null) member.wins = Number(change.wins);
+          if(change.losses != null) member.losses = Number(change.losses);
+        });
+        renderMembers();
+        renderRatingSelect();
+        renderRanking();
+        return {success:true, changes, source:"rpc"};
+      }
+
+      /* RPC không trả changes: đọc lại DB để xem nó có thực sự cập nhật không. */
+      const {data:rows, error:readError} = await supabaseClient
+        .from("members")
+        .select("id,rating,rating_status,rating_confidence,matches_played,wins,losses")
+        .in("id", allIds.map(Number));
+
+      if(!readError && Array.isArray(rows) && rows.length){
+        const changedRows = rows.filter(row =>
+          before[String(row.id)] !== undefined &&
+          Math.abs(Number(row.rating ?? 1) - before[String(row.id)]) > 0.000001
+        );
+
+        if(changedRows.length){
+          changedRows.forEach(row=>{
+            const member = memberById(row.id);
+            if(!member) return;
+            Object.assign(member, row);
+          });
+          renderMembers();
+          renderRatingSelect();
+          renderRanking();
+          return {
+            success:true,
+            changes:changedRows.map(row=>({
+              member_id:row.id,
+              new_rating:Number(row.rating)
+            })),
+            source:"rpc-db-readback"
+          };
+        }
+      }
+    }else{
+      console.warn("apply_match_rating không chạy được, chuyển sang cập nhật rating trực tiếp:", error);
+    }
+  }catch(rpcError){
+    console.warn("apply_match_rating exception, chuyển sang cập nhật rating trực tiếp:", rpcError);
+  }
+
+  /* ---------- 2. Fallback chắc chắn ---------- */
+  const teamMembersA = idsA.map(memberById).filter(Boolean);
+  const teamMembersB = idsB.map(memberById).filter(Boolean);
+
+  if(!teamMembersA.length || !teamMembersB.length){
+    throw new Error("Không tìm thấy thành viên tương ứng với đăng ký của trận đấu.");
+  }
+
+  const avgA = teamMembersA.reduce((sum,m)=>sum + Number(m.rating ?? 1),0) / teamMembersA.length;
+  const avgB = teamMembersB.reduce((sum,m)=>sum + Number(m.rating ?? 1),0) / teamMembersB.length;
+  const delta = calculateRatingDelta(avgA,avgB,Number(scoreA),Number(scoreB));
+
+  const changes=[];
+  const now = new Date().toISOString();
+
+  const makeChange = (member, sideDelta, won) => {
+    const oldRating = Number(member.rating ?? 1);
+    const newRating = Number(Math.max(1,Math.min(5,oldRating + Number(sideDelta || 0))).toFixed(2));
+    return {
+      member,
+      oldRating,
+      newRating,
+      change:Number((newRating-oldRating).toFixed(2)),
+      won
+    };
+  };
+
+  teamMembersA.forEach(m=>changes.push(makeChange(m,delta.deltaA,Number(scoreA)>Number(scoreB))));
+  teamMembersB.forEach(m=>changes.push(makeChange(m,delta.deltaB,Number(scoreB)>Number(scoreA))));
+
+  for(const c of changes){
+    const {error:updateError} = await supabaseClient
+      .from("members")
+      .update({
+        rating:c.newRating,
+        rating_status:"Đã xác thực"
+      })
+      .eq("id",c.member.id);
+
+    if(updateError) throw updateError;
+
+    /* Lịch sử rating: lỗi lịch sử không được phép hoàn tác điểm đã lưu. */
+    const {error:historyError} = await supabaseClient
+      .from("rating_history")
+      .insert({
+        member_id:Number(c.member.id),
+        old_rating:c.oldRating,
+        new_rating:c.newRating,
+        change:c.change,
+        reason:"Cập nhật sau trận đấu",
+        source:"elo_match",
+        created_at:now
+      });
+
+    if(historyError){
+      console.warn("Không ghi được lịch sử rating:",historyError);
+    }
+
+    c.member.rating=c.newRating;
+    c.member.rating_status="Đã xác thực";
+  }
 
   renderMembers();
   renderRatingSelect();
@@ -6171,7 +6297,13 @@ async function updateRatingsAfterMatch(
 
   return {
     success:true,
-    changes
+    changes:changes.map(c=>({
+      member_id:c.member.id,
+      old_rating:c.oldRating,
+      new_rating:c.newRating,
+      change:c.change
+    })),
+    source:"direct-fallback"
   };
 }
 
@@ -11927,18 +12059,9 @@ async function submitMatchResult(matchId) {
       );
 
       showToast(
-        "Đã lưu kết quả nhưng chưa cập nhật rating: " +
-        (ratingError?.message || "")
+        "Đã lưu kết quả nhưng chưa cập nhật rating."
       );
 
-    }
-
-    /* Đọc lại members từ Supabase để giao diện dùng đúng dữ liệu DB,
-       không phụ thuộc cache cũ. */
-    try {
-      await loadMembers();
-    } catch (e) {
-      console.warn("Không tải lại members sau trận:", e);
     }
 
 
@@ -20541,167 +20664,78 @@ window.paidRegs = window.paidRegs || function(tournamentId){
   }
 
   window.updateRatingsAfterMatch = async function(match,scoreA,scoreB){
-    const ids=memberIdsForMatch(match);
-    if(!ids.length) throw new Error('Không xác định được thành viên của trận đấu.');
-
-    let before=await readRatings(ids);
-
-    /* 1) Ưu tiên RPC chính thức */
+    let rpcError=null;
+    let rpcResult=null;
     try{
-      if(typeof oldRating==='function'){
-        await oldRating(match,scoreA,scoreB);
+      if(typeof _oldUpdateRatings==='function') rpcResult=await _oldUpdateRatings(match,scoreA,scoreB);
+      const changes=Array.isArray(rpcResult?.changes)?rpcResult.changes:[];
+      /* RPC phải trả thay đổi. Nếu không có, coi như chưa cập nhật. */
+      if(changes.length){
+        return rpcResult;
       }
+      rpcError=new Error('RPC apply_match_rating không trả về thay đổi rating.');
     }catch(e){
-      console.warn('apply_match_rating lỗi:',e);
+      rpcError=e;
+      console.warn('apply_match_rating failed; dùng fallback:',e);
     }
 
-    /* 2) Không tin response RPC; đọc DB thật */
-    let after=await readRatings(ids);
-    if(after.length && ratingChanged(before,after)){
-      syncLocalMembers(after);
-      return {success:true,changes:after.map(x=>({member_id:x.id,new_rating:x.rating}))};
+    try{
+      const result=await fallbackApplyRating(match,scoreA,scoreB);
+      return result;
+    }catch(fallbackError){
+      console.error('Fallback rating failed:',fallbackError);
+      throw new Error('Không thể cập nhật điểm trình: '+(fallbackError.message||rpcError?.message||'lỗi không xác định'));
     }
-
-    /* 3) RPC không làm đổi DB -> fallback admin_adjust_rating */
-    const regA=getMatchRegistration(match?.team_a);
-    const regB=getMatchRegistration(match?.team_b);
-    const idsA=regMemberIds(regA), idsB=regMemberIds(regB);
-    if(!idsA.length || !idsB.length){
-      throw new Error('Không xác định được VĐV của hai bên.');
-    }
-
-    const byId=new Map(before.map(x=>[String(x.id),x]));
-    const getR=id=>Number(byId.get(String(id))?.rating ?? memberById(id)?.rating ?? 1);
-    const avgA=idsA.reduce((sum,id)=>sum+getR(id),0)/idsA.length;
-    const avgB=idsB.reduce((sum,id)=>sum+getR(id),0)/idsB.length;
-    const calc=calculateRatingDelta(avgA,avgB,Number(scoreA),Number(scoreB));
-
-    const updates=[];
-    idsA.forEach(id=>{
-      const old=Number(getR(id));
-      const next=Math.max(1,Math.min(5,old+Number(calc.deltaA||0)));
-      updates.push({id:Number(id),next});
-    });
-    idsB.forEach(id=>{
-      const old=Number(getR(id));
-      const next=Math.max(1,Math.min(5,old+Number(calc.deltaB||0)));
-      updates.push({id:Number(id),next});
-    });
-
-    for(const u of updates){
-      const {error}=await supabaseClient.rpc('admin_adjust_rating',{
-        p_member_id:u.id,
-        p_new_rating:Number(u.next),
-        p_reason:`Cập nhật trình sau trận ${match.id}: ${scoreA}-${scoreB}.`
-      });
-      if(error) throw error;
-    }
-
-    after=await readRatings(updates.map(x=>String(x.id)));
-    syncLocalMembers(after);
-
-    if(!ratingChanged(before,after)){
-      throw new Error('Đã lưu trận nhưng điểm trình trong cơ sở dữ liệu vẫn không thay đổi.');
-    }
-
-    return {success:true,fallback:true,changes:after.map(x=>({member_id:x.id,new_rating:x.rating}))};
   };
 
-  /* ---------- Đồng bộ giải đang xem với mục Kết quả ---------- */
-  function setResultTournamentContext(tournamentId){
-    const id=String(tournamentId||'');
-    const select=document.getElementById('resultTournamentSelect');
-    if(select){
-      const exists=[...select.options].some(o=>String(o.value)===id);
-      if(exists){
-        select.value=id;
-        try{ renderResults(); }catch(e){}
-      }
-    }
-    window.__activeResultTournamentId=id||null;
+  /* ---------- ADMIN ZOOM ---------- */
+  const ZOOM_KEY='pkl_admin_zoom';
+  const clamp=z=>Math.max(0.70,Math.min(1.30,Number(z)||1));
+
+  window.pklAdminSetZoom=function(value){
+    const z=clamp(value);
+    localStorage.setItem(ZOOM_KEY,String(z));
+    const page=document.querySelector('.tournament-admin-page');
+    if(page) page.style.zoom=String(z);
+    document.querySelectorAll('.pkl-admin-zoom-value').forEach(e=>e.textContent=Math.round(z*100)+'%');
+  };
+  window.pklAdminZoom=function(delta){
+    const current=Number(localStorage.getItem(ZOOM_KEY)||1);
+    window.pklAdminSetZoom(Math.round((current+delta)*100)/100);
+  };
+  window.pklAdminZoomReset=function(){window.pklAdminSetZoom(1);};
+
+  function installZoomBar(){
+    const page=document.querySelector('.tournament-admin-page');
+    if(!page || page.querySelector('.pkl-admin-zoom-bar')) return;
+    const bar=document.createElement('div');
+    bar.className='pkl-admin-zoom-bar';
+    bar.innerHTML=`<span>🔍</span><button type="button" onclick="pklAdminZoom(-0.10)" title="Thu nhỏ">−</button><span class="pkl-admin-zoom-value">100%</span><button type="button" onclick="pklAdminZoom(0.10)" title="Phóng to">+</button><button type="button" onclick="pklAdminZoomReset()" title="Đặt lại">↺</button>`;
+    page.prepend(bar);
+    window.pklAdminSetZoom(Number(localStorage.getItem(ZOOM_KEY)||1));
   }
 
-  /* Bọc openTournament: khi chuyển giải, mục Kết quả cũng chuyển theo. */
-  const oldOpenTournament=window.openTournament;
-  if(typeof oldOpenTournament==='function'){
-    window.openTournament=async function(tournamentId){
-      setResultTournamentContext(tournamentId);
-      const result=await oldOpenTournament.apply(this,arguments);
-      setResultTournamentContext(tournamentId);
-      return result;
-    };
-  }
-
-  /* Bọc openTournamentDetail nếu được gọi từ quản trị/công khai. */
-  const oldOpenDetail=window.openTournamentDetail;
-  if(typeof oldOpenDetail==='function'){
-    window.openTournamentDetail=function(tournamentId){
-      setResultTournamentContext(tournamentId);
-      return oldOpenDetail.apply(this,arguments);
-    };
-  }
-
-  /* Bọc admin mở giải để không giữ giải cũ ở khu vực kết quả. */
-  const oldAdminOpen=window.adminOpenTournamentPage;
-  if(typeof oldAdminOpen==='function'){
-    window.adminOpenTournamentPage=async function(tournamentId){
-      setResultTournamentContext(tournamentId);
-      const r=await oldAdminOpen.apply(this,arguments);
-      setResultTournamentContext(tournamentId);
+  const _oldAdminOpen=window.adminOpenTournamentPage;
+  if(typeof _oldAdminOpen==='function'){
+    window.adminOpenTournamentPage=async function(){
+      const r=await _oldAdminOpen.apply(this,arguments);
+      setTimeout(installZoomBar,0);
       return r;
     };
   }
 
-  /* renderTournamentSelect: nếu giải đang xem đã đổi thì ưu tiên context hiện tại. */
-  const oldRenderSelect=window.renderTournamentSelect;
-  if(typeof oldRenderSelect==='function'){
-    window.renderTournamentSelect=function(){
-      const keep=window.__activeResultTournamentId;
-      oldRenderSelect.apply(this,arguments);
-      if(keep){
-        const select=document.getElementById('resultTournamentSelect');
-        if(select && [...select.options].some(o=>String(o.value)===String(keep))){
-          select.value=String(keep);
-        }
-      }
-    };
+  /* Sticky horizontal scrollbar: không phải kéo xuống cuối workspace mới kéo được. */
+  function improveBracketScroll(){
+    document.querySelectorAll('.tournament-admin-page .direct-bracket-scroll').forEach(el=>{
+      el.style.position='sticky';
+      el.style.bottom='8px';
+      el.style.zIndex='8';
+      el.style.background='#fff';
+    });
   }
-
-  /* ---------- Luật chọn thể thức theo số đội ---------- */
-  window.pklRecommendedTournamentFormat=function(teamCount){
-    const n=Number(teamCount)||0;
-    if(n>=5 && n<=20) return 'group_stage';
-    if(n>20) return 'double_elimination';
-    return null;
-  };
-
-  console.log('Pickleball Lào Cai — RATING DB VERIFY + TOURNAMENT CONTEXT FIX installed.');
-})();
-</script>
-
-<script>
-/* =========================================================
-   PICKLEBALL LÀO CAI — THỂ THỨC THEO SỐ ĐỘI
-   5–20 đội: ưu tiên CHIA BẢNG.
-   >20 đội: ưu tiên LOẠI TRỰC TIẾP.
-   Nếu BTC đã chọn rõ một thể thức, KHÔNG tự ý đổi lựa chọn của BTC.
-========================================================= */
-(function(){
-  function recommendedFormatByCount(n){
-    n=Number(n)||0;
-    if(n>=5 && n<=20) return 'group_stage';
-    if(n>20) return 'double_elimination';
-    return null;
-  }
-  window.pklRecommendedTournamentFormat=recommendedFormatByCount;
-  window.pklFormatPolicy=function(teamCount, selectedFormat){
-    const rec=recommendedFormatByCount(teamCount);
-    return {
-      recommended:rec,
-      selected:selectedFormat||null,
-      use:selectedFormat || rec || null
-    };
-  };
+  const obs=new MutationObserver(()=>{installZoomBar();improveBracketScroll();});
+  obs.observe(document.body,{childList:true,subtree:true});
+  setTimeout(()=>{installZoomBar();improveBracketScroll();},300);
 })();
 </script>
 
