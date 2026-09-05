@@ -17771,6 +17771,22 @@ setTimeout(()=>{
 */
 
 
+/* V34.1 compatibility: một số hàm quản trị cũ có thể gọi _paidRegs/paidRegs ở global scope.
+   Expose helper toàn cục để không làm hỏng các giải cũ khi mở lại trang quản trị. */
+window._paidRegs = window._paidRegs || function(tournamentId){
+  try{
+    return typeof paidRegistrationsForTournament === "function"
+      ? paidRegistrationsForTournament(tournamentId).filter(r => String(r.status || "registered") !== "cancelled")
+      : [];
+  }catch(e){
+    console.warn("V34.1 _paidRegs fallback:", e);
+    return [];
+  }
+};
+window.paidRegs = window.paidRegs || function(tournamentId){
+  return window._paidRegs(tournamentId);
+};
+
 (function(){
 
   "use strict";
@@ -17797,11 +17813,7 @@ setTimeout(()=>{
   }
 
   function _paidRegs(tournamentId){
-    return typeof paidRegistrationsForTournament === "function"
-      ? paidRegistrationsForTournament(tournamentId).filter(r =>
-          String(r.status || "registered") !== "cancelled"
-        )
-      : [];
+    return window._paidRegs(tournamentId);
   }
 
   function _teams(tournamentId){
@@ -19676,7 +19688,7 @@ setTimeout(()=>{
         : `<div class="empty">Chưa có giao diện quản lý.</div>`;
     }
 
-    const paid=_paidRegs(selected.id);
+    const paid=window._paidRegs(selected.id);
     const real=_tm(selected.id);
     const display=_v34BuildDisplay(selected.id);
     const total=_v34StageCount(paid.length);
