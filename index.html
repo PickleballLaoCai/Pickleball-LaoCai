@@ -20522,14 +20522,13 @@ window.paidRegs = window.paidRegs || function(tournamentId){
 
 <script>
 /* =========================================================
-   PICKLEBALL LÀO CAI — FINAL UX + RATING SAFETY PATCH
-   Scope: rating fallback + admin zoom/navigation only.
-   Không thay engine bảng đấu/chia bảng/loại trực tiếp.
+   PICKLEBALL LÀO CAI — FINAL RATING HISTORY FIX
+   Scope: ONLY match-rating update/history.
+   Không thay engine giải đấu, zoom, bảng, trực tiếp.
 ========================================================= */
 (function(){
   'use strict';
 
-  /* ---------- RATING: RPC first, local-admin fallback ---------- */
   const _oldUpdateRatings = window.updateRatingsAfterMatch;
 
   function regMembers(reg){
@@ -20542,11 +20541,74 @@ window.paidRegs = window.paidRegs || function(tournamentId){
   }
 
   function findMember(id){
-    return (Array.isArray(window.members)?window.members:[]).find(m=>String(m.id)===String(id)) ||
-           (typeof memberById==='function'?memberById(id):null);
+    if(Array.isArray(window.members)){
+      const m=window.members.find(x=>String(x.id)===String(id));
+      if(m) return m;
+    }
+    return typeof memberById==='function'?memberById(id):null;
   }
 
-  async function fallbackApplyRating(match, scoreA, scoreB){
+  async function readRatings(ids){
+    const {data,error}=await supabaseClient
+      .from('members')
+      .select('id,full_name,rating,rating_status,matches_played,wins,losses')
+      .in('id',ids.map(Number));
+    if(error) throw error;
+    return data||[];
+  }
+
+  /*
+   * Đây là điểm quan trọng:
+   * RPC apply_match_rating có thể đổi rating nhưng KHÔNG ghi rating_history.
+   * Vì vậy sau khi RPC chạy, ta luôn kiểm tra lịch sử và tự bổ sung
+   * đúng 1 bản ghi "Cập nhật sau trận đấu" nếu cần.
+   */
+  async function ensureMatchHistory(match, beforeMap, afterRows, startedAt){
+    if(!match || !beforeMap || !afterRows?.length) return;
+
+    for(const row of afterRows){
+      const id=String(row.id);
+      if(beforeMap[id]===undefined) continue;
+
+      const old=Number(beforeMap[id]);
+      const next=Number(row.rating??old);
+      const change=Number((next-old).toFixed(2));
+      if(Math.abs(change)<0.000001) continue;
+
+      let exists=false;
+      try{
+        const {data,error}=await supabaseClient
+          .from('rating_history')
+          .select('id,created_at')
+          .eq('member_id',Number(row.id))
+          .eq('reason','Cập nhật sau trận đấu')
+          .gte('created_at',startedAt)
+          .order('created_at',{ascending:false})
+          .limit(1);
+        if(!error && Array.isArray(data) && data.length) exists=true;
+      }catch(e){
+        console.warn('Không kiểm tra được rating_history:',e);
+      }
+
+      if(!exists){
+        const {error}=await supabaseClient.from('rating_history').insert({
+          member_id:Number(row.id),
+          old_rating:old,
+          new_rating:next,
+          change:change,
+          reason:'Cập nhật sau trận đấu',
+          source:'elo_match',
+          created_at:new Date().toISOString()
+        });
+        if(error) throw error;
+      }
+
+      const local=findMember(row.id);
+      if(local) Object.assign(local,row);
+    }
+  }
+
+  async function fallbackApplyRating(match,scoreA,scoreB,beforeMap){
     const regA=typeof getMatchRegistration==='function'?getMatchRegistration(match.team_a):null;
     const regB=typeof getMatchRegistration==='function'?getMatchRegistration(match.team_b):null;
     const idsA=regMembers(regA), idsB=regMembers(regB);
@@ -20554,118 +20616,129 @@ window.paidRegs = window.paidRegs || function(tournamentId){
 
     const teamA=idsA.map(findMember).filter(Boolean);
     const teamB=idsB.map(findMember).filter(Boolean);
-    if(!teamA.length || !teamB.length) throw new Error('Không tìm thấy VĐV trong danh sách thành viên.');
+    if(!teamA.length || !teamB.length) throw new Error('Không tìm thấy thành viên trong danh sách.');
 
-    const avgA=teamA.reduce((s,m)=>s+Number(m.rating||1),0)/teamA.length;
-    const avgB=teamB.reduce((s,m)=>s+Number(m.rating||1),0)/teamB.length;
+    const avgA=teamA.reduce((sum,m)=>sum+Number(m.rating??1),0)/teamA.length;
+    const avgB=teamB.reduce((sum,m)=>sum+Number(m.rating??1),0)/teamB.length;
     const d=typeof calculateRatingDelta==='function'
       ?calculateRatingDelta(avgA,avgB,Number(scoreA),Number(scoreB))
-      :{deltaA:Number(scoreA)>Number(scoreB)?0.05:-0.05,deltaB:Number(scoreA)>Number(scoreB)?-0.05:0.05};
+      :{deltaA:Number(scoreA)>Number(scoreB)?0.05:-0.05,
+        deltaB:Number(scoreA)>Number(scoreB)?-0.05:0.05};
 
     const updates=[];
-    for(const m of teamA){
-      const old=Number(m.rating||1), next=Math.max(1,Math.min(5,old+Number(d.deltaA||0)));
-      updates.push({member:m,old,next,won:Number(scoreA)>Number(scoreB)});
-    }
-    for(const m of teamB){
-      const old=Number(m.rating||1), next=Math.max(1,Math.min(5,old+Number(d.deltaB||0)));
-      updates.push({member:m,old,next,won:Number(scoreB)>Number(scoreA)});
-    }
+    teamA.forEach(m=>{
+      const old=Number(m.rating??1);
+      const next=Number(Math.max(1,Math.min(5,old+Number(d.deltaA||0))).toFixed(2));
+      updates.push({member:m,old,next});
+    });
+    teamB.forEach(m=>{
+      const old=Number(m.rating??1);
+      const next=Number(Math.max(1,Math.min(5,old+Number(d.deltaB||0))).toFixed(2));
+      updates.push({member:m,old,next});
+    });
 
     for(const u of updates){
-      const payload={rating:u.next};
-      if('rating_status' in u.member) payload.rating_status='Đã xác thực';
-      const {error}=await supabaseClient.from('members').update(payload).eq('id',u.member.id);
+      if(Math.abs(u.next-u.old)<0.000001) continue;
+
+      const {error}=await supabaseClient
+        .from('members')
+        .update({rating:u.next,rating_status:'Đã xác thực'})
+        .eq('id',u.member.id);
       if(error) throw error;
+
+      const {error:historyError}=await supabaseClient
+        .from('rating_history')
+        .insert({
+          member_id:Number(u.member.id),
+          old_rating:u.old,
+          new_rating:u.next,
+          change:Number((u.next-u.old).toFixed(2)),
+          reason:'Cập nhật sau trận đấu',
+          source:'elo_match',
+          created_at:new Date().toISOString()
+        });
+      if(historyError) throw historyError;
+
       u.member.rating=u.next;
       u.member.rating_status='Đã xác thực';
     }
 
-    /* Thống kê trận chỉ chạy ở fallback, tránh cộng đôi khi RPC đã xử lý. */
     if(typeof updateMemberMatchStats==='function'){
-      try{ await updateMemberMatchStats(match,scoreA,scoreB); }catch(e){ console.warn('Fallback member stats:',e); }
+      try{await updateMemberMatchStats(match,scoreA,scoreB);}
+      catch(e){console.warn('Fallback member stats:',e);}
+    }
+
+    return {success:true,fallback:true,
+      changes:updates.map(u=>({member_id:u.member.id,new_rating:u.next}))};
+  }
+
+  window.updateRatingsAfterMatch = async function(match,scoreA,scoreB){
+    if(!match || match.status==='bye' || match.__bye || !match.team_a || !match.team_b){
+      return {success:true,skipped:true};
+    }
+
+    const regA=typeof getMatchRegistration==='function'?getMatchRegistration(match.team_a):null;
+    const regB=typeof getMatchRegistration==='function'?getMatchRegistration(match.team_b):null;
+    const ids=[...new Set([...regMembers(regA),...regMembers(regB)].map(Number).filter(Boolean))];
+    if(!ids.length) throw new Error('Không xác định được VĐV của trận đấu.');
+
+    const beforeRows=await readRatings(ids);
+    const beforeMap={};
+    beforeRows.forEach(r=>beforeMap[String(r.id)]=Number(r.rating??1));
+
+    const startedAt=new Date().toISOString();
+    let rpcResult=null;
+    let rpcWorked=false;
+
+    try{
+      if(typeof _oldUpdateRatings==='function'){
+        rpcResult=await _oldUpdateRatings(match,scoreA,scoreB);
+      }
+
+      const afterRows=await readRatings(ids);
+      const changed=afterRows.filter(r=>
+        beforeMap[String(r.id)]!==undefined &&
+        Math.abs(Number(r.rating??1)-beforeMap[String(r.id)])>0.000001
+      );
+
+      if(changed.length){
+        await ensureMatchHistory(match,beforeMap,changed,startedAt);
+        rpcWorked=true;
+        changed.forEach(r=>{
+          const local=findMember(r.id);
+          if(local) Object.assign(local,r);
+        });
+      }
+    }catch(e){
+      console.warn('Rating RPC/history path failed:',e);
+    }
+
+    if(!rpcWorked){
+      const result=await fallbackApplyRating(match,scoreA,scoreB,beforeMap);
+
+      /* Đọc lại DB và kiểm tra history một lần nữa. */
+      const finalRows=await readRatings(ids);
+      await ensureMatchHistory(match,beforeMap,finalRows,startedAt);
+
+      if(typeof renderMembers==='function') renderMembers();
+      if(typeof renderRatingSelect==='function') renderRatingSelect();
+      if(typeof renderRanking==='function') renderRanking();
+
+      return result;
     }
 
     if(typeof renderMembers==='function') renderMembers();
     if(typeof renderRatingSelect==='function') renderRatingSelect();
     if(typeof renderRanking==='function') renderRanking();
 
-    return {success:true, fallback:true, changes:updates.map(u=>({member_id:u.member.id,new_rating:u.next}))};
-  }
-
-  window.updateRatingsAfterMatch = async function(match,scoreA,scoreB){
-    let rpcError=null;
-    let rpcResult=null;
-    try{
-      if(typeof _oldUpdateRatings==='function') rpcResult=await _oldUpdateRatings(match,scoreA,scoreB);
-      const changes=Array.isArray(rpcResult?.changes)?rpcResult.changes:[];
-      /* RPC phải trả thay đổi. Nếu không có, coi như chưa cập nhật. */
-      if(changes.length){
-        return rpcResult;
-      }
-      rpcError=new Error('RPC apply_match_rating không trả về thay đổi rating.');
-    }catch(e){
-      rpcError=e;
-      console.warn('apply_match_rating failed; dùng fallback:',e);
-    }
-
-    try{
-      const result=await fallbackApplyRating(match,scoreA,scoreB);
-      return result;
-    }catch(fallbackError){
-      console.error('Fallback rating failed:',fallbackError);
-      throw new Error('Không thể cập nhật điểm trình: '+(fallbackError.message||rpcError?.message||'lỗi không xác định'));
-    }
-  };
-
-  /* ---------- ADMIN ZOOM ---------- */
-  const ZOOM_KEY='pkl_admin_zoom';
-  const clamp=z=>Math.max(0.70,Math.min(1.30,Number(z)||1));
-
-  window.pklAdminSetZoom=function(value){
-    const z=clamp(value);
-    localStorage.setItem(ZOOM_KEY,String(z));
-    const page=document.querySelector('.tournament-admin-page');
-    if(page) page.style.zoom=String(z);
-    document.querySelectorAll('.pkl-admin-zoom-value').forEach(e=>e.textContent=Math.round(z*100)+'%');
-  };
-  window.pklAdminZoom=function(delta){
-    const current=Number(localStorage.getItem(ZOOM_KEY)||1);
-    window.pklAdminSetZoom(Math.round((current+delta)*100)/100);
-  };
-  window.pklAdminZoomReset=function(){window.pklAdminSetZoom(1);};
-
-  function installZoomBar(){
-    const page=document.querySelector('.tournament-admin-page');
-    if(!page || page.querySelector('.pkl-admin-zoom-bar')) return;
-    const bar=document.createElement('div');
-    bar.className='pkl-admin-zoom-bar';
-    bar.innerHTML=`<span>🔍</span><button type="button" onclick="pklAdminZoom(-0.10)" title="Thu nhỏ">−</button><span class="pkl-admin-zoom-value">100%</span><button type="button" onclick="pklAdminZoom(0.10)" title="Phóng to">+</button><button type="button" onclick="pklAdminZoomReset()" title="Đặt lại">↺</button>`;
-    page.prepend(bar);
-    window.pklAdminSetZoom(Number(localStorage.getItem(ZOOM_KEY)||1));
-  }
-
-  const _oldAdminOpen=window.adminOpenTournamentPage;
-  if(typeof _oldAdminOpen==='function'){
-    window.adminOpenTournamentPage=async function(){
-      const r=await _oldAdminOpen.apply(this,arguments);
-      setTimeout(installZoomBar,0);
-      return r;
+    return {
+      success:true,
+      source:'match_rating',
+      changes:rpcResult?.changes||[]
     };
-  }
+  };
 
-  /* Sticky horizontal scrollbar: không phải kéo xuống cuối workspace mới kéo được. */
-  function improveBracketScroll(){
-    document.querySelectorAll('.tournament-admin-page .direct-bracket-scroll').forEach(el=>{
-      el.style.position='sticky';
-      el.style.bottom='8px';
-      el.style.zIndex='8';
-      el.style.background='#fff';
-    });
-  }
-  const obs=new MutationObserver(()=>{installZoomBar();improveBracketScroll();});
-  obs.observe(document.body,{childList:true,subtree:true});
-  setTimeout(()=>{installZoomBar();improveBracketScroll();},300);
+  console.log('Pickleball Lào Cai — FINAL MATCH RATING HISTORY FIX installed.');
 })();
 </script>
 
