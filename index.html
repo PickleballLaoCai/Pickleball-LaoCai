@@ -19598,51 +19598,74 @@ window.paidRegs = window.paidRegs || function(tournamentId){
     if(!paid.length) return [];
 
     const real=PKL34.matches(id);
-
-    // IMPORTANT: legacy direct tournaments may not have bracket_slot.
-    // Do NOT dump every old match into the new viewer: old V25-V33 engines can
-    // contain obsolete/duplicated loser rounds, which is exactly what caused
-    // the previous Vòng 4/Vòng 5 display. Reconstruct ONLY V1 positions from
-    // the existing V1 rows, then let the single PKL34 engine derive every later
-    // round. Existing later results are picked up by PKL34.actual() above.
-    let slots=null;
-    // Always use the normalized complete V1 slot array. This guarantees that
-    // 7 teams render 4 V1 cards, 16 teams render 8 V1 cards, etc., even if an
-    // older version left incomplete/duplicate bracket_slot data.
-    slots=PKL34.normalizedSlots(id);
-    if(!slots.some(Boolean)){
-      slots=PKL34.autoSlots(paid.map(r=>String(r.id)));
-    }
     const total=PKL34.stageCount(paid.length);
+    const size=PKL34.power2(paid.length);
+    const expectedV1=size/2;
     const out=[];
-    let r1=[];
 
-    for(let i=0,no=1;i<slots.length;i+=2,no++){
-      const a=slots[i]||null,b=slots[i+1]||null;
-      if(!a&&!b) continue;
-      const actual=PKL34.actual(id,"winner",1,no,a,b);
+    /*
+      V34.9 — DỰNG SƠ ĐỒ THEO SLOT, KHÔNG THEO SỐ TRẬN CŨ.
+      Mục tiêu quan trọng: nếu giải có 7 đội thì V1 luôn có đúng 4 card;
+      V2 luôn có 4 card (2 Winners + 2 Losers); các vòng tiếp theo giảm một nửa.
+      Các match cũ chỉ được dùng để giữ kết quả đã đấu, tuyệt đối không dùng
+      số lượng match cũ để quyết định số card phải hiển thị.
+    */
+    const slots=PKL34.normalizedSlots(id);
+    const usedTeams=new Set();
+
+    // Existing V1 rows, indexed by match_no. Chỉ lấy nhánh thắng Vòng 1.
+    const v1Rows=real.filter(m=>
+      PKL34.displayStage(m)===1 && !/^Nhánh\s+thua/i.test(String(m.round_name||""))
+    ).sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0));
+
+    const findV1=(no,a,b)=>{
+      // Ưu tiên đúng match_no + đúng cặp; sau đó đúng match_no có đội.
+      return v1Rows.find(m=>Number(m.match_no||0)===no && PKL34.pair(m.team_a,m.team_b)===PKL34.pair(a,b))
+        || v1Rows.find(m=>Number(m.match_no||0)===no && (m.team_a||m.team_b))
+        || null;
+    };
+
+    const r1=[];
+    for(let no=1;no<=expectedV1;no++){
+      const a=slots[(no-1)*2]||null;
+      const b=slots[(no-1)*2+1]||null;
+      let actual=findV1(no,a,b);
+
+      // Nếu match_no cũ chứa đội khác với slot đã chuẩn hóa, giữ nguyên lịch sử
+      // của match_no đó; đồng thời không cho đội lịch sử xuất hiện lần nữa.
       if(actual){
+        const aa=actual.team_a?String(actual.team_a):null;
+        const bb=actual.team_b?String(actual.team_b):null;
+        if(aa) usedTeams.add(aa);
+        if(bb) usedTeams.add(bb);
         r1.push({...actual,__virtual:false,__source:"winner",__displayStage:1,__displayLabel:PKL34.stageLabel(1,total)});
       }else if(a&&b){
         r1.push(PKL34.virtual(id,1,no,a,b,"winner"));
+        usedTeams.add(String(a)); usedTeams.add(String(b));
       }else if(a){
         r1.push(PKL34.bye(id,1,no,a,"winner"));
+        usedTeams.add(String(a));
+      }else{
+        // Vẫn phải hiện card trống để sơ đồ luôn đủ V1.
+        r1.push(PKL34.placeholder(id,1,no,"winner",total));
       }
     }
     out.push(...r1);
 
-    if(!r1.length) return out;
+    const v1Done=r1.every(PKL34.completed);
 
-    // Chưa hoàn tất V1: vẫn dựng toàn bộ khung các vòng sau, không gán đội giả.
-    if(!r1.every(PKL34.completed)){
-      let wc=r1.length;
-      let lc=r1.filter(m=>m.team_a&&m.team_b).length;
+    // Khi V1 chưa hoàn tất: dựng KHUNG CỐ ĐỊNH cho mọi vòng.
+    // Không phụ thuộc vào số match cũ trong database.
+    if(!v1Done){
+      let wCount=expectedV1;
+      let lCount=Math.max(0,expectedV1-1);
       for(let stage=2;stage<=total;stage++){
-        const wm=Math.max(1,Math.ceil(wc/2));
-        const lm=lc>0?Math.max(1,Math.ceil(lc/2)):0;
-        for(let no=1;no<=wm;no++) out.push(PKL34.placeholder(id,stage,no,"winner",total));
-        for(let no=1;no<=lm;no++) out.push(PKL34.placeholder(id,stage,no,"loser",total));
-        wc=wm; lc=lm;
+        const wMatches=Math.max(1,Math.ceil(wCount/2));
+        const lMatches=lCount>0?Math.max(1,Math.ceil(lCount/2)):0;
+        for(let no=1;no<=wMatches;no++) out.push(PKL34.placeholder(id,stage,no,"winner",total));
+        for(let no=1;no<=lMatches;no++) out.push(PKL34.placeholder(id,stage,no,"loser",total));
+        wCount=wMatches;
+        lCount=lMatches;
       }
       out.push({id:`pkl34-final-${id}`,tournament_id:id,round_name:"Chung kết",match_no:1,
         team_a:null,team_b:null,score_a:null,score_b:null,target_score:15,status:"scheduled",
@@ -19651,6 +19674,7 @@ window.paidRegs = window.paidRegs || function(tournamentId){
       return out;
     }
 
+    // V1 đã xong: derive Winners/Losers hoàn toàn từ KẾT QUẢ V1.
     let currentW=PKL34.unique(r1.map(PKL34.winner).filter(Boolean));
     let currentL=PKL34.unique(r1.map(PKL34.loser).filter(Boolean));
 
@@ -19665,36 +19689,41 @@ window.paidRegs = window.paidRegs || function(tournamentId){
           if(branch==="winner") nextW.push(ids[0]); else nextL.push(ids[0]);
           continue;
         }
-        for(let i=0,no=1;i<ids.length;i+=2,no++){
-          const a=ids[i]||null,b=ids[i+1]||null;
+        const matchCount=Math.ceil(ids.length/2);
+        for(let no=1;no<=matchCount;no++){
+          const a=ids[(no-1)*2]||null;
+          const b=ids[(no-1)*2+1]||null;
           if(!a&&!b) continue;
-          let row;
           const actual=PKL34.actual(id,branch,stage,no,a,b);
+          let row;
           if(actual){
             row={...actual,__virtual:false,__source:branch,__displayStage:stage,__displayLabel:PKL34.stageLabel(stage,total)};
           }else if(a&&b){
-            row=PKL34.virtual(id,stage,no,a,b,branch); unresolved=true;
+            row=PKL34.virtual(id,stage,no,a,b,branch);
+            unresolved=true;
           }else if(a){
             row=PKL34.bye(id,stage,no,a,branch);
           }else continue;
           rows.push(row);
           if(PKL34.completed(row)){
             const w=PKL34.winner(row);
-            if(w){ if(branch==="winner") nextW.push(w); else nextL.push(w); }
+            if(w){if(branch==="winner") nextW.push(w);else nextL.push(w);}
           }else unresolved=true;
         }
       }
 
-      rows.sort((a,b)=>(a.__source==="winner"?0:1)-(b.__source==="winner"?0:1)||Number(a.match_no||0)-Number(b.match_no||0));
+      rows.sort((a,b)=>(a.__source==="winner"?0:1)-(b.__source==="winner"?0:1)
+        ||Number(a.match_no||0)-Number(b.match_no||0));
       out.push(...rows);
 
       if(unresolved){
+        // Dựng tiếp phần khung còn lại theo kích thước lý thuyết, không đọc match cũ.
         let wc=Math.max(1,Math.ceil(currentW.length/2));
         let lc=currentL.length?Math.max(1,Math.ceil(currentL.length/2)):0;
-        for(let s=stage+1;s<=total;s++){
+        for(let s2=stage+1;s2<=total;s2++){
           const wm=Math.max(1,wc),lm=lc>0?Math.max(1,lc):0;
-          for(let no=1;no<=wm;no++) out.push(PKL34.placeholder(id,s,no,"winner",total));
-          for(let no=1;no<=lm;no++) out.push(PKL34.placeholder(id,s,no,"loser",total));
+          for(let no=1;no<=wm;no++) out.push(PKL34.placeholder(id,s2,no,"winner",total));
+          for(let no=1;no<=lm;no++) out.push(PKL34.placeholder(id,s2,no,"loser",total));
           wc=wm;lc=lm;
         }
         out.push({id:`pkl34-final-${id}`,tournament_id:id,round_name:"Chung kết",match_no:1,
@@ -19709,7 +19738,8 @@ window.paidRegs = window.paidRegs || function(tournamentId){
 
       if(currentW.length===1 && currentL.length===1){
         const a=currentW[0],b=currentL[0];
-        const actualFinal=real.find(m=>/chung\s*kết|grand\s*final/i.test(String(m.round_name||"")) && PKL34.pair(m.team_a,m.team_b)===PKL34.pair(a,b));
+        const actualFinal=real.find(m=>/chung\s*kết|grand\s*final/i.test(String(m.round_name||""))
+          && PKL34.pair(m.team_a,m.team_b)===PKL34.pair(a,b));
         out.push(actualFinal
           ? {...actualFinal,__virtual:false,__source:"final",__displayStage:99,__displayLabel:"Chung kết"}
           : {id:`pkl34-final-${id}`,tournament_id:id,round_name:"Chung kết",match_no:1,
@@ -19726,17 +19756,17 @@ window.paidRegs = window.paidRegs || function(tournamentId){
         __source:"final",__displayStage:99,__displayLabel:"Chung kết"});
     }
 
-    // Final canonical cleanup: one card per logical branch/stage/match. This
-    // prevents stale duplicate rows from older engines from appearing twice.
+    // Không được làm mất card chỉ vì database có match cũ trùng key.
     const seen=new Set(),clean=[];
     out.forEach(m=>{
       const key=`${m.__source||"winner"}|${Number(m.__displayStage||1)}|${Number(m.match_no||1)}`;
       if(seen.has(key)) return;
-      seen.add(key); clean.push(m);
+      seen.add(key);clean.push(m);
     });
     clean.sort((a,b)=>Number(a.__displayStage||1)-Number(b.__displayStage||1)
-      || (a.__source==="final"?2:a.__source==="loser"?1:0)-(b.__source==="final"?2:b.__source==="loser"?1:0)
-      || Number(a.match_no||0)-Number(b.match_no||0));
+      ||(a.__source==="final"?2:a.__source==="loser"?1:0)
+      -(b.__source==="final"?2:b.__source==="loser"?1:0)
+      ||Number(a.match_no||0)-Number(b.match_no||0));
     return clean;
   };
 
