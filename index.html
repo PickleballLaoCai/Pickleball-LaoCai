@@ -12,51 +12,7 @@
 
 <title>Pickleball Lào Cai — V25</title>
 
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2">
-
-/* =========================================================
-   V34.4 — CANONICAL DIRECT-TOURNAMENT BINDINGS
-   ---------------------------------------------------------
-   Root fix: the old global entry functions from V25-V33 were
-   still being called by the page, even though V34 had already
-   installed the new engine on window.*.
-
-   Do NOT change data/SQL. Bind the existing V34 engine to the
-   actual global names used by the legacy page entry points.
-   This prevents _currentSlots/_tm/_paidRegs scope collisions.
-   ========================================================= */
-(function(){
-  "use strict";
-  try{
-    if(typeof window.__v34BuildDisplay === "function"){
-      /* Public bracket renderer used by renderTournamentPanel(). */
-      cleanDirectBracketMatches = window.__v34BuildDisplay;
-    }
-  }catch(e){ console.error("V34.4 bind cleanDirectBracketMatches:",e); }
-
-  try{
-    if(typeof window._adminBuildSelectedTournamentHtml === "function"){
-      /* Admin bracket renderer used by adminOpenTournamentPage(). */
-      _adminBuildSelectedTournamentHtml = window._adminBuildSelectedTournamentHtml;
-    }
-  }catch(e){ console.error("V34.4 bind admin builder:",e); }
-
-  try{
-    if(typeof window.generateEliminationMatches === "function"){
-      generateEliminationMatches = window.generateEliminationMatches;
-    }
-  }catch(e){ /* function may only exist as window property */ }
-
-  try{
-    if(typeof window.materializeVirtualDirectMatch === "function"){
-      materializeVirtualDirectMatch = window.materializeVirtualDirectMatch;
-    }
-  }catch(e){ /* function may only exist as window property */ }
-
-  console.log("Pickleball Lào Cai — V34.4 canonical direct-tournament bindings installed.");
-})();
-
-</script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
 <script src="./config.js"></script>
 
@@ -19357,452 +19313,627 @@ window.paidRegs = window.paidRegs || function(tournamentId){
 
 
 
+
+
+
+
+
 /* =========================================================
-   V34 — HIỂN THỊ ĐẦY ĐỦ SƠ ĐỒ + CẬP NHẬT KẾT QUẢ
-   - Hiển thị sẵn toàn bộ các cột Vòng 1 ... Vòng cuối + Chung kết.
-   - Khi chưa có kết quả: ô tương lai hiển thị "Chờ kết quả".
-   - Khi có kết quả: đội thắng/thua được đẩy đúng nhánh, không ghi DB trước.
-   - Nhập kết quả dùng đúng trận canonical, không còn lỗi "Không tìm thấy trận V33".
-   - Giữ nguyên luật loại trực tiếp đã chốt.
+   V34.5 — DIRECT TOURNAMENT ENGINE CLEAN
+   ---------------------------------------------------------
+   Chỉ có MỘT engine cuối cho thể thức Loại trực tiếp.
+   Không dùng helper _tm/_currentSlots/_paidRegs của các bản cũ.
+   Các engine cũ có thể còn trong file để giữ tương thích dữ liệu,
+   nhưng toàn bộ entry point Loại trực tiếp bên dưới đều dùng PKL34.
+
+   Luật:
+   - V1: tất cả đội ở Winners.
+   - Sau V1: Winners gặp Winners; Losers gặp Losers.
+   - Thua ở Winners sau V1: loại.
+   - Thua ở Losers: loại.
+   - Không có đường Losers -> Winners.
+   - Chung kết: vô địch Winners gặp vô địch Losers.
+   - BYE tự động đi tiếp, không tính rating.
 ========================================================= */
 (function(){
-  const _v34StageCount = n => {
-    const size = _power2(Number(n||0));
-    return Math.max(1, Math.round(Math.log2(size)));
+  "use strict";
+
+  const PKL34={};
+
+  PKL34.tournament=function(id){
+    return (tournaments||[]).find(t=>String(t.id)===String(id))||null;
   };
 
-  const _v34StageLabel = (stage, total) => {
-    /* Chỉ đổi tên ở các vòng cuối để người xem dễ hiểu; vẫn giữ Vòng n
-       làm tên phụ/metadata, không thay đổi logic engine. */
-    if(stage === total && total >= 3) return "Bán kết";
-    if(stage === total - 1 && total >= 2) return "Tứ kết";
+  PKL34.regs=function(id){
+    try{
+      if(typeof paidRegistrationsForTournament === "function"){
+        return paidRegistrationsForTournament(id)
+          .filter(r=>String(r.status||"registered")!=="cancelled");
+      }
+    }catch(e){ console.warn("PKL34 regs:",e); }
+    return (registrations||[]).filter(r=>
+      String(r.tournament_id)===String(id) &&
+      String(r.status||"registered")!=="cancelled" &&
+      String(r.payment_status||"unpaid")==="paid_confirmed"
+    );
+  };
+
+  PKL34.matches=function(id){
+    try{
+      if(typeof getTournamentMatches === "function"){
+        return getTournamentMatches(id)||[];
+      }
+    }catch(e){ console.warn("PKL34 matches:",e); }
+    return (matches||[]).filter(m=>String(m.tournament_id)===String(id));
+  };
+
+  PKL34.completed=function(m){
+    return !!m && (m.status==="completed" || m.status==="finished");
+  };
+
+  PKL34.pair=function(a,b){
+    if(!a || !b) return "";
+    return [String(a),String(b)].sort().join("::");
+  };
+
+  PKL34.name=function(id){
+    if(!id) return "BYE";
+    try{
+      if(typeof getMatchSideName === "function"){
+        const n=getMatchSideName(id);
+        if(n) return n;
+      }
+    }catch(e){}
+    const r=(registrations||[]).find(x=>String(x.id)===String(id));
+    try{
+      if(r && typeof getTeamDisplayName === "function") return getTeamDisplayName(r);
+    }catch(e){}
+    return r?.team_name || r?.name || String(id);
+  };
+
+  PKL34.power2=function(n){
+    let x=1;
+    while(x<Math.max(2,Number(n)||0)) x*=2;
+    return x;
+  };
+
+  PKL34.stageCount=function(n){
+    return Math.max(1,Math.round(Math.log2(PKL34.power2(n))));
+  };
+
+  PKL34.stageLabel=function(stage,total){
+    stage=Number(stage||1); total=Number(total||1);
+    if(stage===total && total>=3) return "Bán kết";
+    if(stage===total-1 && total>=2) return "Tứ kết";
     return `Vòng ${stage}`;
   };
 
-  const _v34Placeholder = (tournamentId, stage, no, source, note="Chờ kết quả vòng trước") => ({
-    id:`v34-placeholder-${tournamentId}-${stage}-${source}-${no}`,
-    tournament_id:tournamentId,
-    round_name:`Vòng ${stage}`,
-    match_no:no,
-    team_a:null,
-    team_b:null,
-    score_a:null,
-    score_b:null,
-    target_score:stage===1?11:15,
-    status:"scheduled",
-    notes:note,
-    __virtual:true,
-    __placeholder:true,
-    __source:source,
-    __displayStage:stage,
-    __displayLabel:`Vòng ${stage}`
-  });
-
-  const _v34Virtual = (tournamentId, stage, no, a, b, source, note) => ({
-    id:`v34-${tournamentId}-${stage}-${source}-${no}`,
-    tournament_id:tournamentId,
-    round_name:`Vòng ${stage}`,
-    match_no:no,
-    team_a:a||null,
-    team_b:b||null,
-    score_a:null,
-    score_b:null,
-    target_score:stage===1?11:15,
-    status:"scheduled",
-    notes:note||"V34 — Trận dự kiến",
-    __virtual:true,
-    __source:source,
-    __displayStage:stage,
-    __displayLabel:`Vòng ${stage}`
-  });
-
-  const _v34Bye = (tournamentId, stage, no, a, source) => ({
-    id:`v34-bye-${tournamentId}-${stage}-${source}-${no}`,
-    tournament_id:tournamentId,
-    round_name:`Vòng ${stage}`,
-    match_no:no,
-    team_a:a,
-    team_b:null,
-    score_a:stage===1?11:15,
-    score_b:0,
-    target_score:stage===1?11:15,
-    status:"completed",
-    notes:`V34 — BYE — ${source}`,
-    __virtual:true,
-    __bye:true,
-    __source:source,
-    __displayStage:stage,
-    __displayLabel:`Vòng ${stage}`
-  });
-
-  const _v34Actual = (tournamentId, source, stage, no, a, b) => {
-    const round = _internalRound(source,stage);
-    return _tm(tournamentId).find(m =>
-      String(m.round_name||"")===round &&
-      Number(m.match_no||0)===Number(no||0) &&
-      _pairKey(m.team_a,m.team_b)===_pairKey(a,b)
-    ) || null;
+  PKL34.internalRound=function(source,stage){
+    stage=Number(stage||1);
+    if(stage===99) return "Chung kết";
+    return source==="loser"
+      ? `Nhánh thua — Vòng ${Math.max(1,stage-1)}`
+      : `Nhánh thắng — Vòng ${stage}`;
   };
 
-  const _v34AllComplete = rows => rows.length>0 && rows.every(_isCompleted);
+  PKL34.displayStage=function(m){
+    const n=String(m?.round_name||"");
+    if(/chung\s*kết|grand\s*final/i.test(n)) return 99;
+    let x=n.match(/Vòng\s+(\d+)/i);
+    if(!x) return 1;
+    const num=Number(x[1]);
+    if(/^Nhánh\s+thua/i.test(n)) return num+1;
+    return num;
+  };
 
-  /*
-   * Canonical VIEW V34.
-   * Không ghi DB. Các trận tương lai chỉ là virtual; chỉ trận có đủ 2 đội
-   * mới có nút nhập kết quả.
-   */
-  function _v34BuildDisplay(tournamentId){
-    const t=tournamentById(tournamentId);
+  PKL34.savedSlots=function(id){
+    const regs=PKL34.regs(id);
+    const size=PKL34.power2(regs.length);
+    const slots=Array(size).fill(null);
+    regs.forEach(r=>{
+      const n=Number(r.bracket_slot||0);
+      if(n>=1 && n<=size) slots[n-1]=String(r.id);
+    });
+    return slots;
+  };
+
+  PKL34.hasSavedSlots=function(id){
+    const regs=PKL34.regs(id);
+    return regs.length>0 && regs.every(r=>Number(r.bracket_slot||0)>0) &&
+      new Set(regs.map(r=>String(r.id))).size===regs.length;
+  };
+
+  PKL34.autoSlots=function(ids){
+    const arr=[...(ids||[])];
+    for(let i=arr.length-1;i>0;i--){
+      const j=Math.floor(Math.random()*(i+1));
+      [arr[i],arr[j]]=[arr[j],arr[i]];
+    }
+    const size=PKL34.power2(arr.length);
+    while(arr.length<size) arr.push(null);
+    const out=[];
+    for(let i=0;i<size/2;i++){
+      out.push(arr[i]||null);
+      out.push(arr[size-1-i]||null);
+    }
+    return out;
+  };
+
+  PKL34.actual=function(id,source,stage,no,a,b){
+    const rows=PKL34.matches(id);
+    const internal=PKL34.internalRound(source,stage);
+    let x=rows.find(m=>
+      String(m.round_name||"")===internal &&
+      Number(m.match_no||0)===Number(no||0) &&
+      PKL34.pair(m.team_a,m.team_b)===PKL34.pair(a,b)
+    );
+    if(x) return x;
+    // Compatibility with old direct tournaments: match by public stage + pair.
+    return rows.find(m=>{
+      if(PKL34.completed(m)===false && !m.team_a && !m.team_b) return false;
+      return PKL34.displayStage(m)===Number(stage) &&
+        PKL34.pair(m.team_a,m.team_b)===PKL34.pair(a,b);
+    })||null;
+  };
+
+  PKL34.winner=function(m){
+    if(!PKL34.completed(m)) return null;
+    if(m.team_a && !m.team_b) return m.team_a;
+    if(!m.team_a && m.team_b) return m.team_b;
+    const a=Number(m.score_a),b=Number(m.score_b);
+    if(!Number.isFinite(a)||!Number.isFinite(b)) return null;
+    return a>b?m.team_a:m.team_b;
+  };
+
+  PKL34.loser=function(m){
+    if(!PKL34.completed(m)||!m.team_a||!m.team_b) return null;
+    const a=Number(m.score_a),b=Number(m.score_b);
+    if(!Number.isFinite(a)||!Number.isFinite(b)) return null;
+    return a>b?m.team_b:m.team_a;
+  };
+
+  PKL34.unique=function(ids){
+    const out=[],seen=new Set();
+    (ids||[]).forEach(id=>{
+      if(!id) return;
+      const k=String(id);
+      if(seen.has(k)) return;
+      seen.add(k); out.push(String(id));
+    });
+    return out;
+  };
+
+  PKL34.virtual=function(id,stage,no,a,b,source){
+    return {
+      id:`pkl34-${id}-${stage}-${source}-${no}`,
+      tournament_id:id,
+      round_name:PKL34.internalRound(source,stage),
+      match_no:no,
+      team_a:a||null,team_b:b||null,
+      score_a:null,score_b:null,target_score:stage===1?11:15,
+      status:"scheduled",
+      notes:`PKL34 — ${source==="winner"?"Winners":"Losers"} Vòng ${stage}`,
+      __virtual:true,__source:source,__displayStage:stage,
+      __displayLabel:PKL34.stageLabel(stage,PKL34.stageCount(PKL34.regs(id).length))
+    };
+  };
+
+  PKL34.bye=function(id,stage,no,a,source){
+    return {
+      id:`pkl34-bye-${id}-${stage}-${source}-${no}`,
+      tournament_id:id,
+      round_name:PKL34.internalRound(source,stage),
+      match_no:no,team_a:a,team_b:null,
+      score_a:stage===1?11:15,score_b:0,target_score:stage===1?11:15,
+      status:"completed",notes:`PKL34 — BYE — ${source}`,
+      __virtual:true,__bye:true,__source:source,__displayStage:stage,
+      __displayLabel:PKL34.stageLabel(stage,PKL34.stageCount(PKL34.regs(id).length))
+    };
+  };
+
+  PKL34.placeholder=function(id,stage,no,source,total){
+    return {
+      id:`pkl34-placeholder-${id}-${stage}-${source}-${no}`,
+      tournament_id:id,round_name:PKL34.internalRound(source,stage),match_no:no,
+      team_a:null,team_b:null,score_a:null,score_b:null,target_score:stage===1?11:15,
+      status:"scheduled",notes:"Chờ kết quả vòng trước",__virtual:true,__placeholder:true,
+      __source:source,__displayStage:stage,__displayLabel:PKL34.stageLabel(stage,total)
+    };
+  };
+
+  PKL34.build=function(id){
+    const t=PKL34.tournament(id);
     if(!t || t.format!=="double_elimination") return [];
-
-    const paid=_paidRegs(tournamentId);
+    const paid=PKL34.regs(id);
     if(!paid.length) return [];
 
-    const saved=_currentSlots(tournamentId);
-    const savedValid=paid.every(r=>Number(r.bracket_slot||0)>0) &&
-      new Set(paid.map(r=>String(r.id))).size===paid.length;
-    const slots=savedValid ? saved : _autoSlots(paid.map(r=>String(r.id)));
-    const total=_v34StageCount(paid.length);
-    const out=[];
+    const real=PKL34.matches(id);
+    // Giải cũ chưa có bracket_slot: chỉ đọc dữ liệu thật hiện có để không phá lịch cũ.
+    if(!PKL34.hasSavedSlots(id) && real.length){
+      return real
+        .filter(m=>m.team_a||m.team_b)
+        .map(m=>({
+          ...m,
+          __virtual:false,
+          __source:/^Nhánh\s+thua/i.test(String(m.round_name||""))?"loser":"winner",
+          __displayStage:PKL34.displayStage(m),
+          __displayLabel:PKL34.displayStage(m)===99?"Chung kết":PKL34.stageLabel(PKL34.displayStage(m),PKL34.stageCount(paid.length))
+        }))
+        .sort((a,b)=>Number(a.__displayStage||0)-Number(b.__displayStage||0)||Number(a.match_no||0)-Number(b.match_no||0));
+    }
 
-    /* ---------- VÒNG 1 ---------- */
+    const slots=PKL34.hasSavedSlots(id)
+      ? PKL34.savedSlots(id)
+      : PKL34.autoSlots(paid.map(r=>String(r.id)));
+    const total=PKL34.stageCount(paid.length);
+    const out=[];
     let r1=[];
+
     for(let i=0,no=1;i<slots.length;i+=2,no++){
-      const a=slots[i]||null, b=slots[i+1]||null;
-      if(!a && !b) continue;
-      const actual=_v34Actual(tournamentId,"winner",1,no,a,b);
-      let row;
+      const a=slots[i]||null,b=slots[i+1]||null;
+      if(!a&&!b) continue;
+      const actual=PKL34.actual(id,"winner",1,no,a,b);
       if(actual){
-        row={...actual,__virtual:false,__source:"winner",__displayStage:1,__displayLabel:"Vòng 1"};
-      }else if(a && b){
-        row=_v34Virtual(tournamentId,1,no,a,b,"winner","V34 — Vòng 1");
+        r1.push({...actual,__virtual:false,__source:"winner",__displayStage:1,__displayLabel:PKL34.stageLabel(1,total)});
+      }else if(a&&b){
+        r1.push(PKL34.virtual(id,1,no,a,b,"winner"));
       }else if(a){
-        row=_v34Bye(tournamentId,1,no,a,"winner");
-      }else{
-        continue;
+        r1.push(PKL34.bye(id,1,no,a,"winner"));
       }
-      r1.push(row);
     }
     out.push(...r1);
 
-    let currentW=[], currentL=[];
-    const r1Done=_v34AllComplete(r1);
+    if(!r1.length) return out;
 
-    if(r1Done){
-      currentW=_unique(r1.map(_winner).filter(Boolean));
-      currentL=_unique(r1.map(_loser).filter(Boolean));
-    }
-
-    /*
-     * Nếu V1 chưa xong, vẫn dựng khung V2...vòng cuối bằng số ô dự kiến.
-     * Số ô được tính từ kích thước nhánh tối đa thực tế của giải.
-     */
-    if(!r1Done){
-      let wCapacity=r1.length;
-      let lCapacity=Math.max(0,r1.filter(m=>m.team_a&&m.team_b).length);
+    // Chưa hoàn tất V1: vẫn dựng toàn bộ khung các vòng sau, không gán đội giả.
+    if(!r1.every(PKL34.completed)){
+      let wc=r1.length;
+      let lc=r1.filter(m=>m.team_a&&m.team_b).length;
       for(let stage=2;stage<=total;stage++){
-        const wMatches=Math.max(1,Math.ceil(wCapacity/2));
-        const lMatches=lCapacity>0?Math.max(1,Math.ceil(lCapacity/2)):0;
-        for(let no=1;no<=wMatches;no++) out.push(_v34Placeholder(tournamentId,stage,no,"winner"));
-        for(let no=1;no<=lMatches;no++) out.push(_v34Placeholder(tournamentId,stage,wMatches+no,"loser"));
-        wCapacity=wMatches;
-        lCapacity=lMatches;
+        const wm=Math.max(1,Math.ceil(wc/2));
+        const lm=lc>0?Math.max(1,Math.ceil(lc/2)):0;
+        for(let no=1;no<=wm;no++) out.push(PKL34.placeholder(id,stage,no,"winner",total));
+        for(let no=1;no<=lm;no++) out.push(PKL34.placeholder(id,stage,no,"loser",total));
+        wc=wm; lc=lm;
       }
-      out.push({
-        id:`v34-final-${tournamentId}`,
-        tournament_id:tournamentId,
-        round_name:"Chung kết",
-        match_no:1,
-        team_a:null,team_b:null,score_a:null,score_b:null,
-        target_score:15,status:"scheduled",notes:"V34 — Chờ xác định 2 nhà vô địch nhánh",
-        __virtual:true,__placeholder:true,__source:"final",__displayStage:99,__displayLabel:"Chung kết"
-      });
+      out.push({id:`pkl34-final-${id}`,tournament_id:id,round_name:"Chung kết",match_no:1,
+        team_a:null,team_b:null,score_a:null,score_b:null,target_score:15,status:"scheduled",
+        notes:"Chờ xác định 2 nhà vô địch nhánh",__virtual:true,__placeholder:true,
+        __source:"final",__displayStage:99,__displayLabel:"Chung kết"});
       return out;
     }
 
-    /* ---------- VÒNG 2 ... VÒNG CUỐI ---------- */
+    let currentW=PKL34.unique(r1.map(PKL34.winner).filter(Boolean));
+    let currentL=PKL34.unique(r1.map(PKL34.loser).filter(Boolean));
+
     for(let stage=2;stage<=total;stage++){
-      const stageRows=[];
-      const branches=[
-        {source:"winner",ids:_unique(currentW)},
-        {source:"loser",ids:_unique(currentL)}
-      ];
-      let nextW=[], nextL=[];
+      const rows=[];
+      const nextW=[],nextL=[];
       let unresolved=false;
 
-      for(const branch of branches){
-        const ids=branch.ids;
-        if(ids.length<=1){
-          if(ids[0]){
-            if(branch.source==="winner") nextW.push(ids[0]);
-            else nextL.push(ids[0]);
-          }
+      for(const branch of ["winner","loser"]){
+        const ids=branch==="winner"?currentW:currentL;
+        if(ids.length===1){
+          if(branch==="winner") nextW.push(ids[0]); else nextL.push(ids[0]);
           continue;
         }
-
-        /* BYE ưu tiên nhánh thua nếu lẻ: xử lý loser trước về mặt ghép cặp,
-           nhưng hiển thị winner trước để sơ đồ ổn định. */
-        const pairs=[];
-        for(let i=0;i<ids.length;i+=2) pairs.push([ids[i]||null,ids[i+1]||null]);
-        if(branch.source==="loser" && pairs.length && pairs[pairs.length-1][1]===null){
-          /* BYE đã được đặt ở cuối; không đổi thứ tự đội để tránh xáo trộn draw. */
-        }
-
-        pairs.forEach((pair,index)=>{
-          const no=branch.source==="winner"
-            ? index+1
-            : index+1;
-          const a=pair[0], b=pair[1];
-          const actual=_v34Actual(tournamentId,branch.source,stage,no,a,b);
+        for(let i=0,no=1;i<ids.length;i+=2,no++){
+          const a=ids[i]||null,b=ids[i+1]||null;
+          if(!a&&!b) continue;
           let row;
+          const actual=PKL34.actual(id,branch,stage,no,a,b);
           if(actual){
-            row={...actual,__virtual:false,__source:branch.source,__displayStage:stage,__displayLabel:`Vòng ${stage}`};
-          }else if(a && b){
-            row=_v34Virtual(tournamentId,stage,no,a,b,branch.source,
-              `V34 — ${branch.source==="winner"?"Winners":"Losers"} Vòng ${stage}`);
-            unresolved=true;
+            row={...actual,__virtual:false,__source:branch,__displayStage:stage,__displayLabel:PKL34.stageLabel(stage,total)};
+          }else if(a&&b){
+            row=PKL34.virtual(id,stage,no,a,b,branch); unresolved=true;
           }else if(a){
-            row=_v34Bye(tournamentId,stage,no,a,branch.source);
-          }else{
-            return;
-          }
-          stageRows.push(row);
-          if(_isCompleted(row)){
-            const w=_winner(row);
-            if(w){
-              if(branch.source==="winner") nextW.push(w); else nextL.push(w);
-            }
-          }else{
-            unresolved=true;
-          }
-        });
+            row=PKL34.bye(id,stage,no,a,branch);
+          }else continue;
+          rows.push(row);
+          if(PKL34.completed(row)){
+            const w=PKL34.winner(row);
+            if(w){ if(branch==="winner") nextW.push(w); else nextL.push(w); }
+          }else unresolved=true;
+        }
       }
 
-      /* Sắp winner trước, loser sau; không đổi luật. */
-      stageRows.sort((a,b)=>{
-        const sa=a.__source==="winner"?0:1;
-        const sb=b.__source==="winner"?0:1;
-        return sa-sb || Number(a.match_no||0)-Number(b.match_no||0);
-      });
-      out.push(...stageRows);
+      rows.sort((a,b)=>(a.__source==="winner"?0:1)-(b.__source==="winner"?0:1)||Number(a.match_no||0)-Number(b.match_no||0));
+      out.push(...rows);
 
       if(unresolved){
-        /* Dựng tiếp phần khung còn lại, nhưng không tự gán đội. */
-        let wCap=Math.max(1,Math.ceil(currentW.length/2));
-        let lCap=currentL.length?Math.max(1,Math.ceil(currentL.length/2)):0;
+        let wc=Math.max(1,Math.ceil(currentW.length/2));
+        let lc=currentL.length?Math.max(1,Math.ceil(currentL.length/2)):0;
         for(let s=stage+1;s<=total;s++){
-          const wm=Math.max(1,wCap);
-          const lm=lCap>0?Math.max(1,lCap):0;
-          for(let no=1;no<=wm;no++) out.push(_v34Placeholder(tournamentId,s,no,"winner"));
-          for(let no=1;no<=lm;no++) out.push(_v34Placeholder(tournamentId,s,wm+no,"loser"));
-          wCap=wm; lCap=lm;
+          const wm=Math.max(1,wc),lm=lc>0?Math.max(1,lc):0;
+          for(let no=1;no<=wm;no++) out.push(PKL34.placeholder(id,s,no,"winner",total));
+          for(let no=1;no<=lm;no++) out.push(PKL34.placeholder(id,s,no,"loser",total));
+          wc=wm;lc=lm;
         }
-        out.push({
-          id:`v34-final-${tournamentId}`,
-          tournament_id:tournamentId,
-          round_name:"Chung kết",match_no:1,
-          team_a:null,team_b:null,score_a:null,score_b:null,
-          target_score:15,status:"scheduled",notes:"V34 — Chờ xác định 2 nhà vô địch nhánh",
-          __virtual:true,__placeholder:true,__source:"final",__displayStage:99,__displayLabel:"Chung kết"
-        });
+        out.push({id:`pkl34-final-${id}`,tournament_id:id,round_name:"Chung kết",match_no:1,
+          team_a:null,team_b:null,score_a:null,score_b:null,target_score:15,status:"scheduled",
+          notes:"Chờ xác định 2 nhà vô địch nhánh",__virtual:true,__placeholder:true,
+          __source:"final",__displayStage:99,__displayLabel:"Chung kết"});
         break;
       }
 
-      currentW=_unique(nextW);
-      currentL=_unique(nextL);
+      currentW=PKL34.unique(nextW);
+      currentL=PKL34.unique(nextL);
 
       if(currentW.length===1 && currentL.length===1){
-        const a=currentW[0], b=currentL[0];
-        const actualFinal=_tm(tournamentId).find(m=>
-          _isGrandFinal(m.round_name) && _pairKey(m.team_a,m.team_b)===_pairKey(a,b)
-        );
+        const a=currentW[0],b=currentL[0];
+        const actualFinal=real.find(m=>/chung\s*kết|grand\s*final/i.test(String(m.round_name||"")) && PKL34.pair(m.team_a,m.team_b)===PKL34.pair(a,b));
         out.push(actualFinal
           ? {...actualFinal,__virtual:false,__source:"final",__displayStage:99,__displayLabel:"Chung kết"}
-          : {
-              id:`v34-final-${tournamentId}`,tournament_id:tournamentId,
-              round_name:"Chung kết",match_no:1,team_a:a,team_b:b,
-              score_a:null,score_b:null,target_score:15,status:"scheduled",
-              notes:"V34 — Chung kết",__virtual:true,__source:"final",__displayStage:99,__displayLabel:"Chung kết"
-            }
-        );
+          : {id:`pkl34-final-${id}`,tournament_id:id,round_name:"Chung kết",match_no:1,
+             team_a:a,team_b:b,score_a:null,score_b:null,target_score:15,status:"scheduled",
+             notes:"PKL34 — Chung kết",__virtual:true,__source:"final",__displayStage:99,__displayLabel:"Chung kết"});
         break;
       }
     }
 
-    /* Nếu vì BYE mà vòng cuối đã hoàn thành một nhánh nhưng chưa có final,
-       vẫn luôn có một ô Chung kết để người xem biết sơ đồ còn tiếp. */
     if(!out.some(m=>Number(m.__displayStage)===99)){
-      out.push({
-        id:`v34-final-${tournamentId}`,tournament_id:tournamentId,
-        round_name:"Chung kết",match_no:1,team_a:null,team_b:null,
-        score_a:null,score_b:null,target_score:15,status:"scheduled",
-        notes:"V34 — Chờ xác định 2 nhà vô địch nhánh",
-        __virtual:true,__placeholder:true,__source:"final",__displayStage:99,__displayLabel:"Chung kết"
-      });
+      out.push({id:`pkl34-final-${id}`,tournament_id:id,round_name:"Chung kết",match_no:1,
+        team_a:null,team_b:null,score_a:null,score_b:null,target_score:15,status:"scheduled",
+        notes:"Chờ xác định 2 nhà vô địch nhánh",__virtual:true,__placeholder:true,
+        __source:"final",__displayStage:99,__displayLabel:"Chung kết"});
     }
-
     return out;
-  }
+  };
 
-  window.__v34BuildDisplay=_v34BuildDisplay;
-  window.cleanDirectBracketMatches=_v34BuildDisplay;
-
-  /* Materialize V34: tìm theo public stage + đúng cặp; không phụ thuộc
-     round_name được truyền từ nút. */
-  window.materializeVirtualDirectMatch=async function(tournamentId,roundName,matchNo,teamA,teamB){
-    const t=tournamentById(tournamentId);
-    if(!t || t.format!=="double_elimination"){ _toast("Không tìm thấy giải loại trực tiếp."); return; }
-    if(!canManageTournament(t)){ _toast("Bạn không có quyền nhập kết quả."); return; }
-    if(!teamA || !teamB){ _toast("Trận BYE không cần nhập kết quả."); return; }
-    if(!hasAdminPermission("enter_results") && !isSuperAdmin()){
-      _toast("Tài khoản chưa được cấp quyền nhập kết quả."); return;
+  PKL34.saveSlots=async function(id,slots,mode){
+    const t=PKL34.tournament(id);
+    if(!t || !(typeof canManageTournament==="function" && canManageTournament(t))) throw new Error("Bạn không có quyền sắp lịch giải này.");
+    const regs=PKL34.regs(id),allowed=new Set(regs.map(r=>String(r.id)));
+    const selected=(slots||[]).filter(Boolean).map(String);
+    if(new Set(selected).size!==selected.length) throw new Error("Một đội đang được xếp trùng nhiều vị trí.");
+    if(selected.some(x=>!allowed.has(x))) throw new Error("Có đội không nằm trong danh sách đã xác nhận nộp phí.");
+    if(new Set(selected).size!==allowed.size) throw new Error("Phải xếp đủ tất cả đội đã xác nhận nộp phí.");
+    const v1=PKL34.matches(id).filter(m=>String(m.round_name||"")==="Nhánh thắng — Vòng 1");
+    if(v1.some(PKL34.completed)) throw new Error("Vòng 1 đã có kết quả. Không thể thay đổi bốc thăm.");
+    for(const r of regs){
+      const idx=(slots||[]).findIndex(x=>x&&String(x)===String(r.id));
+      const slot=idx>=0?idx+1:null;
+      const {data,error}=await supabaseClient.from("tournament_registrations").update({bracket_slot:slot}).eq("id",r.id).select().single();
+      if(error) throw error;
+      const li=(registrations||[]).findIndex(x=>String(x.id)===String(r.id));
+      if(li>=0) registrations[li]=data||{...registrations[li],bracket_slot:slot};
     }
+    const {data:tdata,error:te}=await supabaseClient.from("tournaments").update({bracket_mode:mode}).eq("id",id).select().single();
+    if(te) throw te;
+    const ti=(tournaments||[]).findIndex(x=>String(x.id)===String(id));
+    if(ti>=0) tournaments[ti]=tdata||{...tournaments[ti],bracket_mode:mode};
+  };
 
-    const label=String(roundName||"");
-    const stageMatch=label.match(/Vòng\s+(\d+)/i);
-    let stage=stageMatch?Number(stageMatch[1]):0;
-    if(!stage && /tứ\s*kết/i.test(label)) stage=_v34StageCount(_paidRegs(tournamentId).length)-1;
-    if(!stage && /bán\s*kết/i.test(label)) stage=_v34StageCount(_paidRegs(tournamentId).length);
-    if(!stage && /chung\s*kết|grand\s*final/i.test(label)) stage=99;
-    if(!stage) stage=Number(matchNo||1);
-
-    const display=_v34BuildDisplay(tournamentId);
-    const wanted=display.find(m=>m.__virtual&&!m.__placeholder&&!m.__bye &&
-      Number(m.__displayStage)===stage &&
-      _pairKey(m.team_a,m.team_b)===_pairKey(teamA,teamB));
-    if(!wanted){
-      /* Trận đã được materialize giữa lúc giao diện chưa refresh: mở trận thật nếu có. */
-      const fallback=_tm(tournamentId).find(m=>
-        _pairKey(m.team_a,m.team_b)===_pairKey(teamA,teamB) &&
-        (_displayStageOfMatch(m)===stage || (stage===99 && _isGrandFinal(m.round_name)))
-      );
-      if(fallback){ await openMatchResultModal(fallback.id); return; }
-      _toast("Không tìm thấy trận tương ứng trong sơ đồ hiện tại."); return;
+  PKL34.createV1=async function(id){
+    const t=PKL34.tournament(id),paid=PKL34.regs(id);
+    if(!t || t.format!=="double_elimination") throw new Error("Không tìm thấy giải loại trực tiếp.");
+    if(paid.length<2) throw new Error("Cần ít nhất 2 đội/người đã xác nhận nộp phí.");
+    const slots=PKL34.hasSavedSlots(id)?PKL34.savedSlots(id):PKL34.autoSlots(paid.map(r=>String(r.id)));
+    if(!PKL34.hasSavedSlots(id)) await PKL34.saveSlots(id,slots,"auto");
+    const rows=PKL34.matches(id);
+    for(let i=0,no=1;i<slots.length;i+=2,no++){
+      const a=slots[i]||null,b=slots[i+1]||null;
+      if(!a&&!b) continue;
+      const exists=rows.find(m=>String(m.round_name||"")==="Nhánh thắng — Vòng 1" && Number(m.match_no||0)===no && PKL34.pair(m.team_a,m.team_b)===PKL34.pair(a,b)) ||
+        rows.find(m=>PKL34.displayStage(m)===1 && PKL34.pair(m.team_a,m.team_b)===PKL34.pair(a,b));
+      if(exists) continue;
+      const payload={tournament_id:id,round_name:"Nhánh thắng — Vòng 1",match_no:no,team_a:a,team_b:b,
+        target_score:11,status:a&&b?"scheduled":"completed",score_a:a&&b?null:11,score_b:a&&b?null:0,
+        notes:a&&b?"PKL34 — Vòng 1":"PKL34 — BYE — winner"};
+      const {data,error}=await supabaseClient.from("matches").insert(payload).select("*").single();
+      if(error) throw error;
+      matches.push(data);
     }
+    if(typeof loadAllMatches==="function") await loadAllMatches();
+  };
 
-    const source=wanted.__source||"winner";
-    const internalRound=source==="final"?"Chung kết":_internalRound(source,stage);
-    const existing=_tm(tournamentId).find(m=>
-      String(m.round_name||"")===internalRound &&
-      _pairKey(m.team_a,m.team_b)===_pairKey(teamA,teamB));
-    if(existing){ await openMatchResultModal(existing.id); return; }
-
-    const payload={
-      tournament_id:tournamentId,
-      round_name:internalRound,
-      match_no:Number(matchNo||1),
-      team_a:teamA,team_b:teamB,
-      target_score:Number(wanted.target_score||15),
-      status:"scheduled",score_a:null,score_b:null,
-      notes:`V34 — ${source==="winner"?"Winners":"Losers"} Vòng ${stage}`
+  PKL34.renderPublic=async function(){
+    const id=currentTournamentId,t=PKL34.tournament(id);
+    if(!t || t.format!=="double_elimination") return false;
+    const oldRender=PKL34.renderPublic._old;
+    if(typeof oldRender!=="function") return false;
+    // clean engine is installed before this call, so old renderer no longer hits broken V34 helpers.
+    await oldRender();
+    const panel=document.getElementById("tournamentPanel");
+    if(!panel) return true;
+    const root=panel.querySelector(".tournament-detail")||panel;
+    const display=PKL34.build(id);
+    const total=PKL34.stageCount(PKL34.regs(id).length);
+    const rows=display.filter(m=>Number(m.__displayStage)!==99 || m.team_a || m.team_b);
+    const grouped={};
+    display.forEach(m=>{
+      const stage=Number(m.__displayStage||1);
+      const label=stage===99?"Chung kết":PKL34.stageLabel(stage,total);
+      (grouped[label] ||= []).push(m);
+    });
+    const esc=v=>typeof escapeHtml==="function"?escapeHtml(String(v??"")):String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[c]));
+    const card=m=>{
+      const done=PKL34.completed(m),bye=!!m.__bye || (!m.team_b&&!!m.team_a);
+      const a=m.team_a?PKL34.name(m.team_a):"Chờ kết quả";
+      const b=m.team_b?PKL34.name(m.team_b):(m.team_a?(bye?"BYE":"Chờ kết quả"):"Chờ kết quả");
+      const sa=m.score_a??"—",sb=m.score_b??(bye?0:"—");
+      let action="";
+      if(!done && m.team_a && m.team_b && typeof canManageMatch==="function" && canManageMatch(m)){
+        action=m.__virtual?`<button class="btn primary direct-bracket-result-btn" onclick="materializeVirtualDirectMatch('${esc(id)}','${esc(m.__displayLabel||`Vòng ${m.__displayStage}`)}',${Number(m.match_no||1)},'${esc(m.team_a)}','${esc(m.team_b)}')">Nhập kết quả</button>`:
+          `<button class="btn primary direct-bracket-result-btn" onclick="openMatchResultModal('${esc(m.id)}')">Nhập kết quả</button>`;
+      }
+      const wa=done&&Number(m.score_a)>Number(m.score_b),wb=done&&Number(m.score_b)>Number(m.score_a);
+      return `<div class="direct-bracket-match ${done?"is-completed":""} ${bye?"is-bye":""}">
+        <div class="direct-bracket-match-head"><span>Trận ${Number(m.match_no||1)}</span><span class="direct-bracket-status">${bye?"BYE":(done?"Đã đấu":(m.__placeholder?"Chờ kết quả":"Chưa đấu"))}</span></div>
+        <div class="direct-bracket-team ${wa?"winner":""}"><span class="direct-bracket-name">${esc(a)}</span><strong>${esc(sa)}</strong></div>
+        <div class="direct-bracket-team ${wb?"winner":""}"><span class="direct-bracket-name">${esc(b)}</span><strong>${esc(sb)}</strong></div>
+        ${action}</div>`;
     };
+    const columns=Object.entries(grouped).map(([label,ms])=>`<div class="direct-bracket-column"><div class="direct-bracket-column-title">${esc(label)}</div><div class="direct-bracket-column-matches">${ms.sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0)).map(card).join("")}</div></div>`).join("");
+    const shell=`<div class="direct-bracket-shell" style="margin-top:12px"><div class="direct-bracket-title"><div><strong>🏆 Sơ đồ loại trực tiếp</strong><div class="muted">Các vòng được hiển thị liên tục. Kết quả cập nhật trực tiếp vào sơ đồ.</div></div><span class="chip">${rows.length} lượt hiển thị</span></div><div class="direct-bracket-scroll"><div class="direct-bracket">${columns||'<div class="empty">Chưa có sơ đồ.</div>'}</div></div></div>`;
+    const section=[...root.querySelectorAll(".card")].find(c=>/Sơ đồ thi đấu|Lịch thi đấu/.test(c.querySelector(".section-title")?.textContent||""));
+    if(section){
+      const title=section.querySelector(".section-title");
+      section.innerHTML=(title?title.outerHTML:'<div class="section-title">🏆 Sơ đồ thi đấu</div>')+shell;
+    }
+    return true;
+  };
+
+  PKL34.materialize=async function(tournamentId,roundName,matchNo,teamA,teamB){
+    const t=PKL34.tournament(tournamentId);
+    if(!t || t.format!=="double_elimination"){ showToast?.("Không tìm thấy giải loại trực tiếp."); return; }
+    if(typeof canManageTournament!=="function" || !canManageTournament(t)){ showToast?.("Bạn không có quyền nhập kết quả."); return; }
+    if(!teamA||!teamB){ showToast?.("Trận BYE không cần nhập kết quả."); return; }
+    if(typeof hasAdminPermission==="function" && !hasAdminPermission("enter_results") && !(typeof isSuperAdmin==="function"&&isSuperAdmin())){ showToast?.("Tài khoản chưa được cấp quyền nhập kết quả."); return; }
+    const label=String(roundName||"");
+    let stage=Number(label.match(/Vòng\s+(\d+)/i)?.[1]||0);
+    if(!stage && /tứ\s*kết/i.test(label)) stage=PKL34.stageCount(PKL34.regs(tournamentId).length)-1;
+    if(!stage && /bán\s*kết/i.test(label)) stage=PKL34.stageCount(PKL34.regs(tournamentId).length);
+    if(!stage && /chung\s*kết|grand\s*final/i.test(label)) stage=99;
+    const display=PKL34.build(tournamentId);
+    const wanted=display.find(m=>m.__virtual&&!m.__placeholder&&!m.__bye&&Number(m.__displayStage)===stage&&PKL34.pair(m.team_a,m.team_b)===PKL34.pair(teamA,teamB));
+    if(!wanted){
+      const fallback=PKL34.matches(tournamentId).find(m=>PKL34.pair(m.team_a,m.team_b)===PKL34.pair(teamA,teamB)&&PKL34.displayStage(m)===stage);
+      if(fallback){await openMatchResultModal(fallback.id);return;}
+      showToast?.("Không tìm thấy trận tương ứng trong sơ đồ hiện tại.");return;
+    }
+    const source=wanted.__source||"winner";
+    const internal=source==="final"?"Chung kết":PKL34.internalRound(source,stage);
+    const existing=PKL34.matches(tournamentId).find(m=>String(m.round_name||"")===internal&&PKL34.pair(m.team_a,m.team_b)===PKL34.pair(teamA,teamB));
+    if(existing){await openMatchResultModal(existing.id);return;}
+    const payload={tournament_id:tournamentId,round_name:internal,match_no:Number(matchNo||1),team_a:teamA,team_b:teamB,target_score:Number(wanted.target_score||15),status:"scheduled",score_a:null,score_b:null,notes:`PKL34 — ${source==="winner"?"Winners":"Losers"} Vòng ${stage}`};
     const {data,error}=await supabaseClient.from("matches").insert(payload).select("*").single();
-    if(error){ console.error("V34 materialize:",error); _toast("Không thể tạo trận: "+(error.message||"Lỗi Supabase")); return; }
+    if(error){console.error("PKL34 materialize:",error);showToast?.("Không thể tạo trận: "+error.message);return;}
     matches.push(data);
-    await loadAllMatches();
-    if(typeof renderTournamentPanel==="function") await renderTournamentPanel();
-    if(window.__adminTournamentContext && isAdmin()) await adminOpenTournamentPage(tournamentId,true);
+    if(typeof loadAllMatches==="function") await loadAllMatches();
+    if(typeof adminOpenTournamentPage==="function" && window.__adminTournamentContext){ await adminOpenTournamentPage(tournamentId,true); }
     await openMatchResultModal(data.id);
   };
 
-  /* Khi submit kết quả xong, đảm bảo cả workspace quản trị và sơ đồ công khai
-     được nạp lại dữ liệu mới. Không đổi công thức rating. */
-  const _v34OldSubmit=window.submitMatchResult || submitMatchResult;
-  window.submitMatchResult=async function(matchId){
-    await _v34OldSubmit(matchId);
-    try{
-      await loadAllMatches();
-      const m=matches.find(x=>String(x.id)===String(matchId));
-      if(m){ currentTournamentId=m.tournament_id; }
-      if(window.__adminTournamentContext && isAdmin() && m){
-        await adminOpenTournamentPage(m.tournament_id,true);
-      }else if(m){
-        renderResults();
-        await renderTournamentPanel();
-      }
-    }catch(e){ console.warn("V34 refresh bracket:",e); }
-  };
-
-  /* Workspace admin cuối cùng dùng đúng V34 display, và hiển thị toàn bộ cột. */
-  const _v34OldAdminBuilder=window._adminBuildSelectedTournamentHtml;
-  window._adminBuildSelectedTournamentHtml=function(selected,canEnter){
-    if(!selected || selected.format!=="double_elimination"){
-      return typeof _v34OldAdminBuilder==="function"
-        ? _v34OldAdminBuilder(selected,canEnter)
-        : `<div class="empty">Chưa có giao diện quản lý.</div>`;
-    }
-
-    const paid=window._paidRegs(selected.id);
-    const real=_tm(selected.id);
-    const display=_v34BuildDisplay(selected.id);
-    const total=_v34StageCount(paid.length);
+  PKL34.adminHtml=function(selected,canEnter){
+    const paid=PKL34.regs(selected.id),real=PKL34.matches(selected.id),display=PKL34.build(selected.id),total=PKL34.stageCount(paid.length);
     const mode=String(selected.bracket_mode||"");
-    const grouped={};
-    display.forEach(m=>{
-      const stage=Number(m.__displayStage||0);
-      const label=stage===99?"Chung kết":_v34StageLabel(stage,total);
-      (grouped[label] ||= []).push(m);
-    });
-
-    const v1Done=real.some(m=>String(m.round_name||"")==="Nhánh thắng — Vòng 1" && _isCompleted(m));
-    const card=(m)=>{
-      const completed=_isCompleted(m), bye=!!m.__bye || (!m.team_b && !!m.team_a);
-      const a=m.team_a?_teamName(m.team_a):"Chờ kết quả";
-      const b=m.team_b?_teamName(m.team_b):(m.team_a?(bye?"BYE":"Chờ kết quả") : "Chờ kết quả");
-      const sa=m.score_a ?? "—", sb=m.score_b ?? (bye?0:"—");
-      const canAction=canEnter && !completed && m.team_a && m.team_b;
-      let action="";
-      if(canAction){
-        action=m.__virtual
-          ? `<button class="btn btn-primary" style="margin-top:7px;padding:7px 10px" onclick="materializeVirtualDirectMatch('${_esc(selected.id)}','${_esc(m.__displayLabel||`Vòng ${m.__displayStage}`)}',${Number(m.match_no||1)},'${_esc(m.team_a)}','${_esc(m.team_b)}')">📝 Nhập kết quả</button>`
-          : `<button class="btn btn-primary" style="margin-top:7px;padding:7px 10px" onclick="openMatchResultModal('${_esc(m.id)}')">📝 Nhập kết quả</button>`;
-      }
-      return `<div class="card" style="padding:10px;margin-bottom:9px;min-height:108px">
-        <div class="muted">Trận ${Number(m.match_no||1)} · ${bye?"BYE":(m.__placeholder?"Chờ kết quả":(completed?"Đã đấu":"Chưa đấu"))}</div>
-        <div style="margin-top:6px"><b>${_esc(a)}</b><strong style="float:right">${_esc(sa)}</strong></div>
-        <div style="margin-top:4px"><b>${_esc(b)}</b><strong style="float:right">${_esc(sb)}</strong></div>
-        ${action}
-      </div>`;
+    const grouped={}; display.forEach(m=>{const s=Number(m.__displayStage||1),label=s===99?"Chung kết":PKL34.stageLabel(s,total);(grouped[label] ||= []).push(m);});
+    const esc=v=>typeof escapeHtml==="function"?escapeHtml(String(v??"")):String(v??"");
+    const card=m=>{
+      const done=PKL34.completed(m),bye=!!m.__bye||(!m.team_b&&!!m.team_a),a=m.team_a?PKL34.name(m.team_a):"Chờ kết quả",b=m.team_b?PKL34.name(m.team_b):(m.team_a?(bye?"BYE":"Chờ kết quả"):"Chờ kết quả");
+      const action=canEnter&&!done&&m.team_a&&m.team_b?(m.__virtual?`<button class="btn btn-primary" style="margin-top:7px;padding:7px 10px" onclick="materializeVirtualDirectMatch('${esc(selected.id)}','${esc(m.__displayLabel||`Vòng ${m.__displayStage}`)}',${Number(m.match_no||1)},'${esc(m.team_a)}','${esc(m.team_b)}')">📝 Nhập kết quả</button>`:`<button class="btn btn-primary" style="margin-top:7px;padding:7px 10px" onclick="openMatchResultModal('${esc(m.id)}')">📝 Nhập kết quả</button>`):"";
+      return `<div class="card" style="padding:10px;margin-bottom:9px;min-height:108px"><div class="muted">Trận ${Number(m.match_no||1)} · ${bye?"BYE":(m.__placeholder?"Chờ kết quả":(done?"Đã đấu":"Chưa đấu"))}</div><div style="margin-top:6px"><b>${esc(a)}</b><strong style="float:right">${esc(m.score_a??"—")}</strong></div><div style="margin-top:4px"><b>${esc(b)}</b><strong style="float:right">${esc(m.score_b??(bye?0:"—"))}</strong></div>${action}</div>`;
     };
-
-    const cols=Object.entries(grouped).map(([label,rows])=>`<div class="bracket-column" style="width:240px;flex:0 0 240px">
-      <h5 style="text-align:center">${_esc(label)}</h5>
-      ${rows.sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0)).map(card).join("")}
-    </div>`).join("");
-
-    return `<div class="admin-tournament-workspace">
-      <div class="card" style="margin-bottom:14px">
-        <div class="section-title">🎯 Xếp Vòng 1</div>
-        <div class="chips"><span class="chip">${paid.length} đội đã nộp phí</span><span class="chip">Chế độ: ${mode==="manual"?"Bốc thăm thủ công":"Tự động"}</span><span class="chip">${v1Done?"Vòng 1 đã có kết quả":"Chưa chốt Vòng 1"}</span></div>
-        <div class="row-actions" style="margin-top:12px">
-          ${!v1Done?`<button class="btn btn-primary" onclick="v33AutoDraw('${_esc(selected.id)}')">⚡ Sắp lịch tự động & tạo Vòng 1</button><button class="btn btn-secondary" onclick="v33OpenManualDraw('${_esc(selected.id)}')">🎲 Nhập kết quả bốc thăm</button>`:"<span class='muted'>Vòng 1 đã khóa. Các vòng sau cập nhật theo kết quả.</span>"}
-        </div>
-      </div>
-      <div class="chips"><span class="chip">Loại trực tiếp · V34</span><span class="chip">${display.filter(m=>Number(m.__displayStage)!==99).length} lượt + Chung kết</span><span class="chip">${real.filter(_isCompleted).length} trận thật đã đấu</span></div>
-      <div class="bracket-scroll" style="overflow-x:auto;padding:10px 0 14px;margin-top:10px"><div class="bracket-board" style="min-width:max-content;display:flex;gap:18px;align-items:flex-start">${cols}</div></div>
-    </div>`;
+    const cols=Object.entries(grouped).map(([label,ms])=>`<div class="bracket-column" style="width:240px;flex:0 0 240px"><h5 style="text-align:center">${esc(label)}</h5>${ms.sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0)).map(card).join("")}</div>`).join("");
+    const v1Done=real.some(m=>String(m.round_name||"")==="Nhánh thắng — Vòng 1"&&PKL34.completed(m));
+    return `<div class="admin-tournament-workspace"><div class="card" style="margin-bottom:14px"><div class="section-title">🎯 Xếp Vòng 1</div><div class="chips"><span class="chip">${paid.length} đội đã nộp phí</span><span class="chip">Chế độ: ${mode==="manual"?"Bốc thăm thủ công":"Tự động"}</span><span class="chip">${v1Done?"Vòng 1 đã có kết quả":"Chưa chốt Vòng 1"}</span></div><div class="row-actions" style="margin-top:12px">${!v1Done?`<button class="btn btn-primary" onclick="v34AutoDraw('${esc(selected.id)}')">⚡ Sắp lịch tự động & tạo Vòng 1</button><button class="btn btn-secondary" onclick="v34OpenManualDraw('${esc(selected.id)}')">🎲 Nhập kết quả bốc thăm</button>`:`<span class="muted">Vòng 1 đã khóa. Các vòng sau cập nhật theo kết quả.</span>`}</div></div><div class="chips"><span class="chip">Loại trực tiếp</span><span class="chip">${display.length} lượt hiển thị</span><span class="chip">${real.filter(PKL34.completed).length} trận thật đã đấu</span></div><div class="bracket-scroll" style="overflow-x:auto;padding:10px 0 14px;margin-top:10px"><div class="bracket-board" style="min-width:max-content;display:flex;gap:18px;align-items:flex-start">${cols||'<div class="empty">Chưa có sơ đồ.</div>'}</div></div></div>`;
   };
 
-  /* V34.2 compatibility: expose the V34 helper functions globally.
-     Legacy admin/result flows from older versions can call these helpers
-     by global name when reopening existing tournaments. */
-  window._tm = _tm;
-  window._paidRegs = _paidRegs;
-  window.paidRegs = _paidRegs;
-  window._currentSlots = _currentSlots;
-  window._pairKey = _pairKey;
-  window._isCompleted = _isCompleted;
-  if(typeof _displayStageOfMatch === "function") window._displayStageOfMatch = _displayStageOfMatch;
-  if(typeof _isGrandFinal === "function") window._isGrandFinal = _isGrandFinal;
-  if(typeof _internalRound === "function") window._internalRound = _internalRound;
-  if(typeof _v34StageCount === "function") window._v34StageCount = _v34StageCount;
-  if(typeof _v34StageLabel === "function") window._v34StageLabel = _v34StageLabel;
-  if(typeof _teamName === "function") window._teamName = _teamName;
+  PKL34.autoDraw=async function(id){
+    try{
+      const paid=PKL34.regs(id); if(paid.length<2) throw new Error("Chưa đủ đội/người đã xác nhận nộp phí.");
+      const slots=PKL34.autoSlots(paid.map(r=>String(r.id)));
+      await PKL34.saveSlots(id,slots,"auto");
+      await PKL34.createV1(id);
+      if(typeof adminOpenTournamentPage==="function") await adminOpenTournamentPage(id,true);
+      else if(typeof renderTournamentPanel==="function") await renderTournamentPanel();
+      showToast?.("Đã sắp lịch tự động và tạo Vòng 1.");
+    }catch(e){console.error("PKL34 autoDraw:",e);showToast?.("Không thể sắp lịch: "+(e.message||e));}
+  };
 
-  console.log("Pickleball Lào Cai — V34.2 display/result refresh installed.");
+  PKL34.openManual= function(id){
+    const t=PKL34.tournament(id),paid=PKL34.regs(id);
+    if(!t || t.format!=="double_elimination"){showToast?.("Không tìm thấy giải loại trực tiếp.");return;}
+    if(typeof canManageTournament!=="function"||!canManageTournament(t)){showToast?.("Bạn không có quyền bốc thăm.");return;}
+    if(paid.length<2){showToast?.("Cần ít nhất 2 đội/người đã xác nhận nộp phí.");return;}
+    const size=PKL34.power2(paid.length),current=PKL34.hasSavedSlots(id)?PKL34.savedSlots(id):Array(size).fill(null);
+    const esc=v=>typeof escapeHtml==="function"?escapeHtml(String(v??"")):String(v??"");
+    const options='<option value="">— BYE / để trống —</option>'+paid.map(r=>`<option value="${esc(r.id)}">${esc(PKL34.name(r.id))}</option>`).join("");
+    const html=`<div class="admin-panel"><div class="section-title">🎲 Bốc thăm thủ công — Vòng 1</div><div class="notice">BTC nhập đúng kết quả bốc thăm thực tế. Mỗi đội chỉ được xuất hiện 1 lần; slot trống sẽ được xử lý BYE.</div><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-top:14px">${current.map((v,i)=>`<div class="card" style="padding:12px"><b>Vị trí ${i+1}</b><select class="pkl34-slot" data-slot="${i+1}" style="width:100%;margin-top:7px">${options}</select></div>`).join("")}</div><div class="actions" style="margin-top:14px"><button class="btn btn-primary" onclick="v34SaveManualDraw('${esc(id)}')">💾 Lưu kết quả bốc thăm</button><button class="btn btn-secondary" onclick="adminOpenTournamentPage('${esc(id)}',true)">← Quay lại quản lý giải</button></div></div>`;
+    openModal("🎲 Bốc thăm thủ công",html);
+    setTimeout(()=>document.querySelectorAll('.pkl34-slot').forEach((el,i)=>el.value=current[i]||""),0);
+  };
+
+  PKL34.saveManual=async function(id){
+    const slots=[...document.querySelectorAll('.pkl34-slot')].sort((a,b)=>Number(a.dataset.slot)-Number(b.dataset.slot)).map(el=>el.value||null);
+    try{await PKL34.saveSlots(id,slots,"manual");await PKL34.createV1(id);closeModal?.();await adminOpenTournamentPage(id,true);showToast?.("Đã lưu bốc thăm và tạo Vòng 1.");}
+    catch(e){console.error("PKL34 saveManual:",e);showToast?.("Không lưu được bốc thăm: "+(e.message||e));}
+  };
+
+  // Install ONLY the final direct entry points.
+  const oldRenderTournamentPanel=renderTournamentPanel;
+  const oldGenerateEliminationMatches=window.generateEliminationMatches;
+  PKL34.renderPublic._old=oldRenderTournamentPanel;
+  window.cleanDirectBracketMatches=PKL34.build;
+  window.__pkl34BuildDisplay=PKL34.build;
+  window.materializeVirtualDirectMatch=PKL34.materialize;
+  window.generateEliminationMatches=async function(id){
+    const t=PKL34.tournament(id);
+    if(t && t.format==="double_elimination"){
+      try{
+        await PKL34.createV1(id);
+        if(typeof adminOpenTournamentPage==="function") await adminOpenTournamentPage(id,true);
+        else if(typeof renderTournamentPanel==="function") await renderTournamentPanel();
+      }catch(e){
+        console.error("PKL34 generate V1:",e);
+        if(typeof showToast==="function") showToast("Không thể tạo Vòng 1: "+(e.message||e));
+      }
+      return;
+    }
+    return typeof oldGenerateEliminationMatches==="function" ? oldGenerateEliminationMatches(id) : undefined;
+  };
+  window.v34AutoDraw=PKL34.autoDraw;
+  window.v34OpenManualDraw=PKL34.openManual;
+  window.v34SaveManualDraw=PKL34.saveManual;
+  // Keep old button names working, but point them to the single final engine.
+  window.v33AutoDraw=PKL34.autoDraw;
+  window.v33OpenManualDraw=PKL34.openManual;
+  window.v33SaveManualDraw=PKL34.saveManual;
+
+  const oldAdminBuilder=window._adminBuildSelectedTournamentHtml;
+  window._pkl34OldAdminBuilder=oldAdminBuilder;
+  window._adminBuildSelectedTournamentHtml=function(selected,canEnter){
+    if(selected && selected.format==="double_elimination") return PKL34.adminHtml(selected,canEnter);
+    return typeof oldAdminBuilder==="function"?oldAdminBuilder(selected,canEnter):`<div class="empty">Chưa có giao diện quản lý.</div>`;
+  };
+
+  // Public renderer: old renderer is retained for all other formats; for direct format,
+  // let it build the normal tournament page and then replace only the direct bracket block.
+  renderTournamentPanel=async function(){
+    const t=PKL34.tournament(currentTournamentId);
+    if(!t || t.format!=="double_elimination") return typeof oldRenderTournamentPanel==="function"?oldRenderTournamentPanel():undefined;
+    // The old renderer uses cleanDirectBracketMatches(), now safely bound to PKL34.
+    await oldRenderTournamentPanel();
+    const panel=document.getElementById("tournamentPanel");
+    if(!panel) return;
+    const root=panel.querySelector(".tournament-detail")||panel;
+    const display=PKL34.build(t.id), total=PKL34.stageCount(PKL34.regs(t.id).length), grouped={};
+    display.forEach(m=>{const s=Number(m.__displayStage||1),label=s===99?"Chung kết":PKL34.stageLabel(s,total);(grouped[label] ||= []).push(m);});
+    const esc=v=>typeof escapeHtml==="function"?escapeHtml(String(v??"")):String(v??"");
+    const card=m=>{
+      const done=PKL34.completed(m),bye=!!m.__bye||(!m.team_b&&!!m.team_a);
+      const a=m.team_a?PKL34.name(m.team_a):"Chờ kết quả",b=m.team_b?PKL34.name(m.team_b):(m.team_a?(bye?"BYE":"Chờ kết quả"):"Chờ kết quả");
+      const sa=m.score_a??"—",sb=m.score_b??(bye?0:"—"),wa=done&&Number(m.score_a)>Number(m.score_b),wb=done&&Number(m.score_b)>Number(m.score_a);
+      let action="";
+      if(!done&&m.team_a&&m.team_b&&typeof canManageMatch==="function"&&canManageMatch(m)) action=m.__virtual?`<button class="btn primary direct-bracket-result-btn" onclick="materializeVirtualDirectMatch('${esc(t.id)}','${esc(m.__displayLabel||`Vòng ${m.__displayStage}`)}',${Number(m.match_no||1)},'${esc(m.team_a)}','${esc(m.team_b)}')">Nhập kết quả</button>`:`<button class="btn primary direct-bracket-result-btn" onclick="openMatchResultModal('${esc(m.id)}')">Nhập kết quả</button>`;
+      return `<div class="direct-bracket-match ${done?"is-completed":""} ${bye?"is-bye":""}"><div class="direct-bracket-match-head"><span>Trận ${Number(m.match_no||1)}</span><span class="direct-bracket-status">${bye?"BYE":(done?"Đã đấu":(m.__placeholder?"Chờ kết quả":"Chưa đấu"))}</span></div><div class="direct-bracket-team ${wa?"winner":""}"><span class="direct-bracket-name">${esc(a)}</span><strong>${esc(sa)}</strong></div><div class="direct-bracket-team ${wb?"winner":""}"><span class="direct-bracket-name">${esc(b)}</span><strong>${esc(sb)}</strong></div>${action}</div>`;
+    };
+    const cols=Object.entries(grouped).map(([label,ms])=>`<div class="direct-bracket-column"><div class="direct-bracket-column-title">${esc(label)}</div><div class="direct-bracket-column-matches">${ms.sort((a,b)=>Number(a.match_no||0)-Number(b.match_no||0)).map(card).join("")}</div></div>`).join("");
+    const shell=`<div class="direct-bracket-shell" style="margin-top:12px"><div class="direct-bracket-title"><div><strong>🏆 Sơ đồ loại trực tiếp</strong><div class="muted">Các vòng hiển thị liên tục từ trái sang phải. Kết quả cập nhật ngay vào sơ đồ.</div></div><span class="chip">${display.length} lượt</span></div><div class="direct-bracket-scroll"><div class="direct-bracket">${cols||'<div class="empty">Chưa có sơ đồ.</div>'}</div></div></div>`;
+    const section=[...root.querySelectorAll(".card")].find(c=>/Sơ đồ thi đấu|Lịch thi đấu/.test(c.querySelector(".section-title")?.textContent||""));
+    if(section){const title=section.querySelector(".section-title");section.innerHTML=(title?title.outerHTML:'<div class="section-title">🏆 Sơ đồ thi đấu</div>')+shell;}
+  };
+
+  // Final admin page entry: only direct format is custom; all other formats remain untouched.
+  const oldAdminOpen=adminOpenTournamentPage;
+  adminOpenTournamentPage=async function(id,focusResults=false){
+    const t=PKL34.tournament(id);
+    if(!t || t.format!=="double_elimination") return typeof oldAdminOpen==="function"?oldAdminOpen(id,focusResults):undefined;
+    if(typeof isAdmin==="function"&&!isAdmin()){showToast?.("Phiên quản trị không còn hiệu lực.");return;}
+    if(typeof canManageTournament==="function"&&!canManageTournament(t)&&!(typeof isSuperAdmin==="function"&&isSuperAdmin())){showToast?.("Bạn không có quyền quản lý giải này.");return;}
+    const canEnter=typeof canManageTournament==="function"&&canManageTournament(t)&&typeof hasAdminPermission==="function"&&hasAdminPermission("enter_results");
+    currentTournamentId=t.id;
+    window.__adminTournamentContext={tournamentId:String(t.id),focusResults:!!focusResults};
+    const work=PKL34.adminHtml(t,canEnter);
+    openModal("⚙️ Quản lý giải đấu",`<div class="admin-panel tournament-admin-page"><div class="chips"><span class="admin-role">${escRole()}</span></div><div class="actions"><button class="btn btn-secondary" onclick="renderAdminPanel()">⚙️ Tổng quan quản trị</button><button class="btn btn-secondary" onclick="renderAdminTournamentManager('${String(t.id)}')">🏆 Danh sách giải</button><button class="btn btn-secondary" onclick="renderAdminRatingManager()">📊 Chấm trình</button><button class="btn btn-danger" onclick="adminLogout()">Đăng xuất</button></div><div class="section-title">🏆 ${escapeHtml?.(t.name||"Giải đấu")||t.name||"Giải đấu"}</div><div class="notice">${escapeHtml?.(tournamentFormatText?.(t.format)||"Loại trực tiếp")||"Loại trực tiếp"} · ${PKL34.regs(t.id).length} đăng ký · ${PKL34.matches(t.id).length} trận thật</div>${work}</div>`);
+    const box=document.getElementById("modal")?.querySelector(".modal-box"); if(box) box.classList.add("tournament-admin-fullscreen");
+  };
+
+  function escRole(){try{return escapeHtml?.(adminRoleText?.()||"")||"";}catch(e){return "";}}
+
+  console.log("Pickleball Lào Cai — V34.5 single direct engine installed.");
 })();
-
-
 
 </script>
 
