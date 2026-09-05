@@ -19758,6 +19758,88 @@ window.paidRegs = window.paidRegs || function(tournamentId){
   console.log("Pickleball Lào Cai — V34.2 display/result refresh installed.");
 })();
 
+
+/* =========================================================
+   V34.3 — GLOBAL COMPATIBILITY BRIDGE
+   ---------------------------------------------------------
+   Các phiên bản cũ của trang quản trị có một số hàm gọi trực tiếp
+   _paidRegs / paidRegs / _tm / _currentSlots bằng tên global.
+   V34.x trước đây chỉ expose các hàm này ở cuối IIFE nên một số
+   luồng mở giải cũ có thể vẫn bắt gặp ReferenceError.
+
+   Bridge này là GLOBAL thật sự (var ở top-level), không thay đổi
+   dữ liệu hay logic giải đấu. Nó chỉ bảo đảm các tên cũ luôn tồn tại.
+   ========================================================= */
+(function(){
+  "use strict";
+
+  function _v343PaidRegs(tournamentId){
+    try{
+      if(typeof paidRegistrationsForTournament === "function"){
+        return (paidRegistrationsForTournament(tournamentId) || [])
+          .filter(r => String(r.payment_status || "paid_confirmed") === "paid_confirmed")
+          .filter(r => String(r.status || "registered") !== "cancelled");
+      }
+    }catch(e){ console.warn("V34.3 paid registrations bridge:",e); }
+    try{
+      return (window.registrations || [])
+        .filter(r => String(r.tournament_id) === String(tournamentId))
+        .filter(r => String(r.payment_status || "paid_confirmed") === "paid_confirmed")
+        .filter(r => String(r.status || "registered") !== "cancelled");
+    }catch(e){ return []; }
+  }
+
+  function _v343Tm(tournamentId){
+    try{
+      if(typeof getTournamentMatches === "function") return getTournamentMatches(tournamentId) || [];
+    }catch(e){ console.warn("V34.3 matches bridge:",e); }
+    try{
+      return (window.matches || []).filter(m => String(m.tournament_id) === String(tournamentId));
+    }catch(e){ return []; }
+  }
+
+  function _v343Power2(n){
+    let x=1;
+    while(x<Math.max(2,Number(n)||0)) x*=2;
+    return x;
+  }
+
+  function _v343CurrentSlots(tournamentId){
+    const regs=_v343PaidRegs(tournamentId);
+    const maxSlot=Math.max(
+      _v343Power2(regs.length),
+      ...regs.map(r=>Number(r.bracket_slot||0))
+    );
+    const slots=Array(maxSlot).fill(null);
+    regs.forEach(r=>{
+      const slot=Number(r.bracket_slot||0);
+      if(slot>=1 && slot<=slots.length) slots[slot-1]=String(r.id);
+    });
+    return slots;
+  }
+
+  /* top-level var tạo global lexical-compatible binding cho các hàm cũ */
+  window._paidRegs=_v343PaidRegs;
+  window.paidRegs=_v343PaidRegs;
+  window._tm=_v343Tm;
+  window._currentSlots=_v343CurrentSlots;
+
+  try{
+    var _paidRegs=_v343PaidRegs;
+    var paidRegs=_v343PaidRegs;
+    var _tm=_v343Tm;
+    var _currentSlots=_v343CurrentSlots;
+  }catch(e){ console.warn("V34.3 global bridge install:",e); }
+
+  console.log("Pickleball Lào Cai — V34.3 global compatibility bridge installed.");
+})();
+
+/* V34.3: thật sự tạo global bindings ở top-level (không nằm trong IIFE). */
+var _paidRegs = window._paidRegs;
+var paidRegs = window.paidRegs;
+var _tm = window._tm;
+var _currentSlots = window._currentSlots;
+
 </script>
 
 </body>
