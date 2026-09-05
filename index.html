@@ -1919,7 +1919,6 @@ th{
 
 
 <!-- V16 AUDIT: Direct bracket engine isolated; existing rating/permission modules preserved. -->
-<style id="v29-public-create-guard">#view-tournaments #tournamentCreateCard{display:none !important;}</style>
 </head>
 
 
@@ -13969,7 +13968,7 @@ async function loadCurrentAdmin(){
         user_id: currentSession.user.id,
         role: roleData,
         club_name: clubData || null,
-        permissions: roleData === "super_admin" ? Object.keys(ADMIN_PERMISSION_LABELS).reduce((o,k)=>(o[k]=true,o),{}) : (permissionData && Object.keys(permissionData).length ? normalizeAdminPermissions(permissionData) : {...DEFAULT_CLUB_PERMISSIONS}),
+        permissions: roleData === "super_admin" ? Object.keys(ADMIN_PERMISSION_LABELS).reduce((o,k)=>(o[k]=true,o),{}) : normalizeAdminPermissions(permissionData),
         is_active: true,
         created_at: null
       };
@@ -13995,7 +13994,7 @@ async function loadCurrentAdmin(){
     return;
   }
   if(data){
-    currentAdmin = { ...data, permissions: data.role === "super_admin" ? Object.keys(ADMIN_PERMISSION_LABELS).reduce((o,k)=>(o[k]=true,o),{}) : ((data.permissions && Object.keys(data.permissions).length) ? normalizeAdminPermissions(data.permissions) : {...DEFAULT_CLUB_PERMISSIONS}) };
+    currentAdmin = { ...data, permissions: data.role === "super_admin" ? Object.keys(ADMIN_PERMISSION_LABELS).reduce((o,k)=>(o[k]=true,o),{}) : normalizeAdminPermissions(data.permissions) };
     if(data.is_active === false){ currentAdmin = null; }
   } else {
     currentAdmin = null;
@@ -16549,56 +16548,36 @@ function _v26RatingSearchRender(){
   const qName = String(input.value || "").trim().toLowerCase();
   const qPhone = String(phone.value || "").replace(/\D/g,"");
 
-  /* Không hiển thị danh sách khi chưa tìm. Bảng xếp hạng trình bên dưới đã đảm nhiệm việc này. */
   if(!qName && !qPhone){
-    hidden.value = "";
-    box.innerHTML = `<div class="muted">Nhập họ tên và/hoặc số điện thoại để tìm thành viên.</div>`;
+    box.innerHTML = `<div class="muted">Nhập tên hoặc số điện thoại để tìm thành viên.</div>`;
     return;
   }
 
-  const pool = [...(members || [])].sort((a,b)=>{
-    const rd = numberValue(b.rating,1) - numberValue(a.rating,1);
-    if(rd !== 0) return rd;
-    return String(a.full_name||"").localeCompare(String(b.full_name||""),"vi");
-  });
-
-  const results = pool.filter(m=>{
-    const name = String(m.full_name || "").trim().toLowerCase();
+  const results = (members || []).filter(m=>{
+    const name = String(m.full_name || "").toLowerCase();
     const ph = String(m.phone || "").replace(/\D/g,"");
-    return (!qName || name.includes(qName)) && (!qPhone || ph.includes(qPhone));
-  });
-
-  /* Nhập chính xác tên + SĐT thì tự chọn duy nhất một người. */
-  if(qName && qPhone){
-    const exact = results.filter(m=>{
-      const name = String(m.full_name || "").trim().toLowerCase();
-      const ph = String(m.phone || "").replace(/\D/g,"");
-      return name === qName && ph === qPhone;
-    });
-    if(exact.length === 1){
-      selectRatingMemberV26(exact[0].id);
-      return;
-    }
-  }
-
-  /* Không giữ người cũ nếu người dùng đã thay đổi thông tin tìm kiếm. */
-  const current = (members || []).find(m=>String(m.id)===String(hidden.value));
-  if(current){
-    const currentName = String(current.full_name || "").trim().toLowerCase();
-    const currentPhone = String(current.phone || "").replace(/\D/g,"");
-    if((qName && !currentName.includes(qName)) || (qPhone && !currentPhone.includes(qPhone))) hidden.value="";
-  }
+    const nameOk = !qName || name.includes(qName);
+    const phoneOk = !qPhone || ph.includes(qPhone);
+    return nameOk && phoneOk;
+  }).slice(0,20);
 
   if(!results.length){
     box.innerHTML = `<div class="notice">Không tìm thấy thành viên phù hợp. Hãy kiểm tra lại họ tên và số điện thoại.</div>`;
     return;
   }
 
-  /* Chỉ hiện tối đa 10 kết quả khi người dùng thực sự tìm kiếm; không có Top 20 mặc định. */
-  const shown = results.slice(0,10);
-  box.innerHTML =
-    `<div class="muted">Tìm thấy ${results.length > 10 ? "10+" : results.length} kết quả. Chọn đúng thành viên theo tên, SĐT và trình.</div>` +
-    shown.map(m=>_v26RatingMemberResultHtml(m, hidden.value)).join("");
+  box.innerHTML = results.map(m=>{
+    const selected = String(hidden.value)===String(m.id);
+    return `<button type="button"
+      class="rating-member-result ${selected?"selected":""}"
+      style="width:100%;text-align:left;border:1px solid #e8bfd3;background:#fff;border-radius:10px;padding:9px 11px;margin-top:7px;cursor:pointer"
+      onclick="selectRatingMemberV26('${esc(m.id)}')">
+      <b>${escapeHtml(m.full_name || "Không tên")}</b>
+      <span class="muted"> · ${escapeHtml(m.phone || "Chưa có SĐT")}</span>
+      <span class="chip" style="float:right">Trình ${formatRating(m.rating)}</span>
+      ${m.club ? `<div class="muted" style="margin-top:3px">${escapeHtml(m.club)}</div>` : ""}
+    </button>`;
+  }).join("");
 }
 
 function selectRatingMemberV26(memberId){
@@ -17173,12 +17152,13 @@ _v26Install();
 function _v27ApplyTournamentCreateVisibility(){
   const card=document.getElementById("tournamentCreateCard");
   if(card){
-    // Form tạo giải chỉ xuất hiện trong khu vực Quản trị/Chủ tịch CLB.
-    card.style.setProperty("display","none","important");
+    card.style.display=canCreateTournament()?"":"none";
   }
   const hero=document.querySelector("#view-tournaments .hero p");
   if(hero){
-    hero.textContent="Xem giải đấu, đăng ký thi đấu và theo dõi kết quả.";
+    hero.textContent=canCreateTournament()
+      ? "Tạo giải, đăng ký thi đấu và điều phối trận."
+      : "Xem giải đấu, đăng ký thi đấu và theo dõi kết quả.";
   }
 }
 
@@ -17513,10 +17493,34 @@ renderTournamentPanel=async function(){
 // đảm bảo nếu một bản builder cũ còn được gọi thì phần standings không được nối.
 
 /* ---------- V27: RENDER LẠI QUYỀN TẠO GIẢI SAU LOGIN/LOGOUT ---------- */
+const _v27OldLoadCurrentAdmin=loadCurrentAdmin;
+loadCurrentAdmin=async function(){
+  await _v27OldLoadCurrentAdmin();
+  _v27ApplyTournamentCreateVisibility();
+};
+
 
 /* =========================================================
-   V29 — FIX QUYỀN TẠO GIẢI + FORM TẠO GIẢI TRONG QUẢN TRỊ
+   52. START
 ========================================================= */
+
+initializeApplication();
+
+startAutoRefresh();
+
+
+/* =========================================================
+   HẾT PHẦN 4/4
+========================================================= */
+
+
+/* =========================================================
+   V28 — KHU VỰC TẠO GIẢI CHỈ DÀNH CHO QUẢN TRỊ / CHỦ CLB
+   - Người dùng công khai không thấy form tạo giải.
+   - Chủ CLB / Quản trị thấy nút "Tạo giải đấu" trong khu vực quản trị.
+   - Dùng cùng form và cùng logic tạo giải cũ, không thay đổi schema.
+========================================================= */
+
 function _v28HidePublicTournamentCreate(){
   const card=document.getElementById("tournamentCreateCard");
   if(card) card.style.setProperty("display","none","important");
@@ -17636,68 +17640,91 @@ function openAdminCreateTournamentModal(){
 /* Luôn ẩn form công khai, kể cả trước khi renderTournaments chạy. */
 _v28HidePublicTournamentCreate();
 
-_v27OldLoadCurrentAdmin=loadCurrentAdmin;
-loadCurrentAdmin=async function(){
-  await _v27OldLoadCurrentAdmin();
-  _v27ApplyTournamentCreateVisibility();
+
+
+/* =========================================================
+   V33 — KHÔI PHỤC BASELINE V28 + CHỈ SỬA ĐÚNG CÁC LỖI CUỐI
+   - Không thay đổi loadAll/data engine của V28.
+   - Public: tuyệt đối không hiện form tạo giải.
+   - Admin/Chủ CLB: nút tạo giải mở đúng form.
+   - Chấm trình: giữ giao diện chọn thành viên gọn, hiển thị TOP 20 theo trình cao -> thấp.
+   - Admin chi tiết giải: có nút quay lại quản trị.
+========================================================= */
+
+function _v33RestoreRatingSelect(){
+  const oldSearch=document.getElementById("ratingMemberSearch");
+  const oldPhone=document.getElementById("ratingMemberPhone");
+  const oldResults=document.getElementById("ratingMemberResults");
+  const hidden=document.getElementById("ratingMember");
+  if(!hidden) return;
+  if(oldSearch || oldPhone || oldResults){
+    const wrap=oldSearch?.closest(".form-grid") || oldPhone?.closest(".form-grid");
+    const parent=wrap?.parentElement || oldSearch?.parentElement || oldPhone?.parentElement;
+    const holder=document.createElement("div");
+    holder.className="field";
+    holder.innerHTML=`<label>Thành viên *</label><select id="ratingMember" required><option value="">-- Chọn thành viên --</option></select><div class="small muted" style="margin-top:5px">Hiển thị 20 thành viên có trình cao nhất.</div>`;
+    const oldHidden=hidden;
+    const originalField=oldHidden.closest(".field");
+    if(originalField){
+      originalField.replaceWith(holder);
+    }else if(parent){
+      parent.innerHTML="";
+      parent.appendChild(holder);
+    }
+  }
+
+  const select=document.getElementById("ratingMember");
+  if(!select) return;
+  const current=select.value;
+  const top20=[...(members||[])].sort((a,b)=>{
+    const d=Number(b.rating||1)-Number(a.rating||1);
+    return d || String(a.full_name||"").localeCompare(String(b.full_name||""),"vi");
+  }).slice(0,20);
+  select.innerHTML='<option value="">-- Chọn thành viên --</option>'+
+    top20.map(m=>`<option value="${esc(m.id)}">${esc(m.full_name||"Không tên")} — ${formatRating(m.rating)}</option>`).join("");
+  if(current && top20.some(m=>String(m.id)===String(current))) select.value=current;
+}
+
+/* Public tournament page: luôn ẩn form tạo giải, kể cả khi tài khoản đang đăng nhập. */
+function _v33HidePublicCreate(){
+  const card=document.getElementById("tournamentCreateCard");
+  if(card) card.style.setProperty("display","none","important");
+  const hero=document.querySelector("#view-tournaments .hero p");
+  if(hero) hero.textContent="Xem giải đấu, đăng ký thi đấu và theo dõi kết quả.";
+}
+
+const _v33OldRenderTournaments=renderTournaments;
+renderTournaments=function(){
+  _v33OldRenderTournaments();
+  _v33HidePublicCreate();
 };
 
+/* Admin chi tiết giải: thêm nút quay lại quản trị, không thay đổi luồng dữ liệu. */
+const _v33OldAdminOpenTournamentPage=adminOpenTournamentPage;
+adminOpenTournamentPage=function(tournamentId,focusResults=false){
+  return Promise.resolve(_v33OldAdminOpenTournamentPage(tournamentId,focusResults)).then(result=>{
+    const actions=document.querySelector("#modal .tournament-admin-page .actions");
+    if(actions && !actions.querySelector("[data-v33-back-admin]")){
+      const btn=document.createElement("button");
+      btn.className="btn btn-secondary";
+      btn.setAttribute("data-v33-back-admin","1");
+      btn.textContent="← Quay lại quản trị";
+      btn.onclick=()=>renderAdminTournamentManager();
+      actions.insertBefore(btn,actions.firstChild);
+    }
+    return result;
+  });
+};
 
-/* =========================================================
-   52. START
-========================================================= */
-
-/* =========================================================
-   V32 — FINAL PATCH: CHẤM TRÌNH GỌN + BACK QUẢN TRỊ
-   - Không hiển thị Top 20 khi chưa tìm kiếm.
-   - Bảng xếp hạng trình bên dưới là nơi xem danh sách tổng thể.
-   - Thêm nút quay lại quản trị khi đang xem một giải trong modal quản trị.
-   - Không thay đổi công thức/chính sách chấm trình.
-========================================================= */
-
-(function(){
-  const _oldAdminOpen = window.adminOpenTournamentPage;
-  if(typeof _oldAdminOpen === "function"){
-    window.adminOpenTournamentPage = async function(tournamentId, focusResults=false){
-      const result = await _oldAdminOpen(tournamentId, focusResults);
-      setTimeout(()=>{
-        const page = document.querySelector("#modal .tournament-admin-page");
-        const actions = page?.querySelector(".actions");
-        if(actions && !actions.querySelector(".admin-back-tournaments")){
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = "btn btn-secondary admin-back-tournaments";
-          btn.textContent = "← Quay lại quản trị";
-          btn.onclick = ()=>renderAdminTournamentManager();
-          actions.insertBefore(btn, actions.firstChild);
-        }
-      },0);
-      return result;
-    };
-  }
-})();
-
-initializeApplication();
-
-startAutoRefresh();
-
-
-/* =========================================================
-   HẾT PHẦN 4/4
-========================================================= */
+/* Sau khi mọi hàm cũ đã được nạp, khôi phục UI chấm trình baseline và render TOP 20. */
+setTimeout(()=>{
+  try{ _v33RestoreRatingSelect(); }catch(e){ console.warn("V33 restore rating select",e); }
+  try{ _v33HidePublicCreate(); }catch(e){ console.warn("V33 hide public create",e); }
+},0);
 
 </script>
 
-
-<script>
-(function(){
-  function guard(){
-    const card=document.getElementById("tournamentCreateCard");
-    if(card) card.style.setProperty("display","none","important");
-  }
-  guard();
-  document.addEventListener("DOMContentLoaded",guard);
-})();
-</script>
 </body>
 </html>
+
+
