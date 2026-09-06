@@ -2844,6 +2844,22 @@ th{
 
           </div>
 
+          <div class="field" id="doublesRegistrationModeField" style="display:none; margin-top:12px;">
+            <label>Cách đăng ký giải đôi *</label>
+            <div class="format-box">
+              <label class="format-choice selected">
+                <input type="radio" name="doublesRegistrationMode" value="team" checked>
+                👥 <strong>Đăng ký theo đôi</strong><br>
+                <span class="small muted">Hai thành viên đăng ký cùng nhau.</span>
+              </label>
+              <label class="format-choice">
+                <input type="radio" name="doublesRegistrationMode" value="individual_auto">
+                🎲 <strong>Đăng ký 1 người – tự ghép đôi</strong><br>
+                <span class="small muted">Hệ thống ghép cặp cân trình sau khi đăng ký.</span>
+              </label>
+            </div>
+          </div>
+
         </div>
 
 
@@ -4200,6 +4216,9 @@ function refreshCompetitionChoices(){
     "selected",
     selected === "doubles"
   );
+
+  const modeField = document.getElementById("doublesRegistrationModeField");
+  if(modeField) modeField.style.display = selected === "doubles" ? "block" : "none";
 
 }
 
@@ -6489,6 +6508,9 @@ document
         const tournamentFormat =
           selectedTournamentFormat();
 
+        const doublesRegistrationMode =
+          document.querySelector('input[name="doublesRegistrationMode"]:checked')?.value || "team";
+
 
         const date =
           document
@@ -6606,6 +6628,10 @@ document
           competition_type:
 
             competitionType,
+
+          registration_mode:
+
+            competitionType === "doubles" ? doublesRegistrationMode : "team",
 
           rating_limit:
 
@@ -6861,7 +6887,8 @@ function registrationsForTournament(
       ===
       String(
         tournamentId
-      )
+      ) &&
+      String(registration.status || "registered") !== "paired_member"
 
   );
 
@@ -7387,7 +7414,7 @@ async function renderTournamentPanel() {
 
       <div class="registration-list">
         ${
-          tournamentRegistrations
+          tournamentRegistrations.filter(r => String(r.status || "registered") !== "paired_member")
             .map((reg, index) => {
 
               const member1 = members.find(m => String(m.id) === String(reg.member_id));
@@ -7988,7 +8015,7 @@ async function renderTournamentPanel() {
 
 
           <span class="chip">
-            ${tournamentRegistrations.length}
+            ${tournamentRegistrations.filter(r => String(r.status || "registered") !== "paired_member").length}
             ${
               tournament.competition_type ===
               "doubles"
@@ -8061,13 +8088,17 @@ async function renderTournamentPanel() {
 
 
       <div class="notice" style="margin-top:12px;">
-        💰 <b>Phí:</b> ${paidRegistrationsForTournament(tournament.id).length}/${tournamentRegistrations.filter(r => String(r.status || "registered") !== "cancelled").length} đội/người đã xác nhận nộp phí.
+        💰 <b>Phí:</b> ${paidRegistrationsForTournament(tournament.id).length}/${registrationsForTournament(tournament.id).filter(r => String(r.status || "registered") !== "cancelled").length} đội/người đã xác nhận nộp phí.
         <br><span class="muted">Chỉ các đội đã <b>Đã nộp phí</b> mới được đưa vào bảng đấu/lịch thi đấu. Đội chưa nộp phí sẽ không được xếp trận.</span>
       </div>
       ${isAdmin() && canManageTournament(tournament) ? `
         <div class="row-actions" style="margin-top:10px;">
           <button class="btn primary" onclick="openRegistrationModal('${tournament.id}')">➕ Thêm đội/người thi đấu</button>
+          ${tournament.competition_type === "doubles" && String(tournament.registration_mode || "team") === "individual_auto" ? `<button class="btn btn-secondary" onclick="autoPairIndividualDoubles('${tournament.id}')">🎲 Tự ghép đôi cân trình</button>` : ""}
         </div>` : ""}
+
+      ${tournament.competition_type === "doubles" && String(tournament.registration_mode || "team") === "individual_auto" ? `
+        <div class="notice" style="margin-top:10px;">🎲 <b>Giải đôi đăng ký cá nhân:</b> mỗi người đăng ký riêng. BTC ghép cao với thấp theo tổng trình, xác nhận cặp xong mới đưa các đôi vào sắp bảng/loại trực tiếp.</div>` : ""}
 
       <div class="card" style="margin-top:12px;">
         <div class="section-title">💰 Danh sách đã nộp phí</div>
@@ -8527,16 +8558,18 @@ function openRegistrationModal(tournamentId) {
   }
 
   const isDoubles = tournament.competition_type === "doubles";
+  const isAutoDoubles = isDoubles && String(tournament.registration_mode || "team") === "individual_auto";
   currentTournamentId = tournament.id;
   const currentCount = registrationsForTournament(tournament.id)
     .filter(r => String(r.status || "registered") !== "cancelled").length;
   const maxTeams = Number(tournament.max_teams || 0);
-  const remaining = maxTeams > 0 ? Math.max(0, maxTeams - currentCount) : null;
+  const capacity = isAutoDoubles && maxTeams > 0 ? maxTeams * 2 : maxTeams;
+  const remaining = capacity > 0 ? Math.max(0, capacity - currentCount) : null;
 
   openModal(`
     <div class="modal-head">
       <div>
-        <h3>${isDoubles ? "🏆 Đăng ký đội đôi" : "🏆 Đăng ký thi đấu đơn"}</h3>
+        <h3>${isAutoDoubles ? "🏆 Đăng ký cá nhân – tự ghép đôi" : (isDoubles ? "🏆 Đăng ký đội đôi" : "🏆 Đăng ký thi đấu đơn")}</h3>
         <div class="muted">${escapeHtml(tournament.name || "Giải đấu")}</div>
       </div>
       <button class="icon-btn" onclick="closeModal()">✕</button>
@@ -8553,7 +8586,7 @@ function openRegistrationModal(tournamentId) {
       </div>
       <div class="registration-stat success">
         <span>Đã đăng ký</span>
-        <strong>${currentCount}${maxTeams ? " / " + maxTeams : ""}</strong>
+        <strong>${currentCount}${capacity ? " / " + capacity : ""}</strong>
       </div>
       <div class="registration-stat neutral">
         <span>Còn chỗ</span>
@@ -8564,7 +8597,7 @@ function openRegistrationModal(tournamentId) {
     <div class="notice">
       <strong>📌 Cách đăng ký</strong><br>
       Nhập số điện thoại để hệ thống tự tìm thành viên và lấy trình hiện tại.
-      ${isDoubles ? " Đánh đôi gồm 2 thành viên." : ""}
+      ${isAutoDoubles ? " Đánh đôi đăng ký từng người; BTC sẽ tự ghép các cặp cân trình sau khi đủ người." : (isDoubles ? " Đánh đôi gồm 2 thành viên." : "")}
       <br>
       <span class="muted">🔴 Nếu tổng trình vượt giới hạn của giải, vẫn được đăng ký nhưng hệ thống sẽ cảnh báo để Ban tổ chức xem xét.</span>
     </div>
@@ -8579,7 +8612,7 @@ function openRegistrationModal(tournamentId) {
       </div>
     </div>
 
-    ${isDoubles ? `
+    ${isDoubles && !isAutoDoubles ? `
       <div class="form-group">
         <label>Số điện thoại thành viên 2 *</label>
         <input id="regPhone2" type="tel" inputmode="numeric" autocomplete="off"
@@ -8824,6 +8857,86 @@ function syncPartnerOptions(){
 
 
 /* =========================================================
+   GIẢI ĐÔI ĐĂNG KÝ CÁ NHÂN — TỰ GHÉP CÂN TRÌNH
+   ---------------------------------------------------------
+   Chỉ thêm lớp ghép đôi trước engine hiện tại.
+   Sau khi xác nhận, mỗi cặp được lưu thành một registration
+   có member_id + member2_id nên engine chia bảng/loại trực tiếp
+   hiện có vẫn nhận đúng danh sách đội như trước.
+========================================================= */
+async function autoPairIndividualDoubles(tournamentId){
+  if(!isAdmin()) { showToast("Chỉ quản trị mới được ghép đôi."); return; }
+  const tournament=tournamentById(tournamentId);
+  if(!tournament || tournament.competition_type!=="doubles" || String(tournament.registration_mode||"team")!=="individual_auto") {
+    showToast("Giải này không phải giải đôi đăng ký cá nhân."); return;
+  }
+  if(!canManageTournament(tournament)) { showToast("Bạn không có quyền quản lý giải này."); return; }
+
+  const activeRegs=registrationsForTournament(tournamentId)
+    .filter(r=>String(r.status||"registered")==="registered" && !r.member2_id);
+  if(activeRegs.length < 2) { showToast("Chưa đủ người để ghép đôi."); return; }
+  if(activeRegs.length % 2 !== 0) { showToast("Số người đăng ký đang là số lẻ. Cần thêm 1 người trước khi ghép."); return; }
+
+  const existingMatches=getTournamentMatches(tournamentId);
+  if(existingMatches.length){ showToast("Giải đã có trận đấu, không thể ghép lại để tránh thay đổi dữ liệu."); return; }
+
+  if(activeRegs.some(r=>String(r.payment_status||"unpaid")==="paid_confirmed")){
+    showToast("Hãy ghép đôi trước khi xác nhận nộp phí."); return;
+  }
+
+  const rows=activeRegs.map(r=>{
+    const m=memberById(r.member_id);
+    return {reg:r, member:m, rating:Number(m?.rating||1)};
+  }).filter(x=>x.member);
+  if(rows.length!==activeRegs.length){ showToast("Có người đăng ký không còn trong danh sách thành viên."); return; }
+
+  // Ghép cao với thấp để tổng trình các đôi sát nhau; xáo nhẹ trong cùng mức trình.
+  rows.sort((a,b)=>b.rating-a.rating || Math.random()-0.5);
+  const pairs=[];
+  for(let i=0;i<rows.length/2;i++){
+    const a=rows[i], b=rows[rows.length-1-i];
+    pairs.push({a,b,total:a.rating+b.rating});
+  }
+  pairs.sort((a,b)=>b.total-a.total);
+
+  const ok=confirm(
+    `Hệ thống sẽ ghép ${pairs.length} đôi từ ${rows.length} người theo tổng trình cân bằng.\n\n`+
+    pairs.map((p,i)=>`${i+1}. ${p.a.member.full_name} (${formatRating(p.a.rating)}) + ${p.b.member.full_name} (${formatRating(p.b.rating)}) = ${formatRating(p.total)}`).join("\n")+
+    `\n\nXác nhận ghép các cặp này?`
+  );
+  if(!ok) return;
+
+  try{
+    for(const p of pairs){
+      const survivor=p.a.reg;
+      const partner=p.b.reg;
+      const teamName=`${p.a.member.full_name} & ${p.b.member.full_name}`;
+      const {data,error}=await supabaseClient
+        .from("tournament_registrations")
+        .update({member2_id:p.b.member.id, partner_name:p.b.member.full_name, team_name:teamName, status:"registered"})
+        .eq("id",survivor.id).select().single();
+      if(error) throw error;
+      // Dòng đăng ký thứ hai được giữ lại trong DB dưới trạng thái paired_member để không mất lịch sử,
+      // nhưng không còn được coi là một đội độc lập.
+      const {error:mergeError}=await supabaseClient
+        .from("tournament_registrations")
+        .update({status:"paired_member", team_name:teamName})
+        .eq("id",partner.id);
+      if(mergeError) throw mergeError;
+      const idx=registrations.findIndex(r=>String(r.id)===String(survivor.id));
+      if(idx>=0) registrations[idx]=data || {...registrations[idx],member2_id:p.b.member.id,partner_name:p.b.member.full_name,team_name:teamName};
+      const pidx=registrations.findIndex(r=>String(r.id)===String(partner.id));
+      if(pidx>=0) registrations[pidx]={...registrations[pidx],status:"paired_member",team_name:teamName};
+    }
+    showToast(`Đã ghép ${pairs.length} đôi cân trình. Có thể tiếp tục xác nhận phí và sắp bảng.`);
+    await renderTournamentPanel();
+  }catch(error){
+    console.error("AUTO PAIR DOUBLES ERROR:",error);
+    showToast("Không thể ghép đôi: "+(error?.message||error));
+  }
+}
+
+/* =========================================================
    15. GỬI ĐĂNG KÝ
  ========================================================= */
 
@@ -8849,6 +8962,10 @@ async function submitRegistration(tournamentId) {
       ?.value
       .trim() || "";
 
+
+  const isAutoDoubles =
+    tournament.competition_type === "doubles" &&
+    String(tournament.registration_mode || "team") === "individual_auto";
 
   const phone2 =
     document.getElementById("regPhone2")
@@ -8910,7 +9027,7 @@ async function submitRegistration(tournamentId) {
 
   if (
     tournament.competition_type ===
-    "doubles"
+    "doubles" && !isAutoDoubles
   ) {
 
     member2 =
@@ -8949,7 +9066,7 @@ async function submitRegistration(tournamentId) {
   // Vượt giới hạn trình chỉ là cảnh báo, KHÔNG chặn đăng ký.
   const r1 = Number(member1.rating || 1);
   const r2 = member2 ? Number(member2.rating || 1) : 0;
-  const totalRating = tournament.competition_type === "doubles" ? r1 + r2 : r1;
+  const totalRating = tournament.competition_type === "doubles" && !isAutoDoubles ? r1 + r2 : r1;
   const ratingLimit = Number(tournament.rating_limit);
   if(Number.isFinite(ratingLimit) && totalRating > ratingLimit){
     const proceed = confirm(
@@ -9054,10 +9171,14 @@ async function submitRegistration(tournamentId) {
    * Kiểm tra giới hạn số đội/người
    */
 
+  const registrationCapacity = isAutoDoubles && tournament.max_teams
+    ? Number(tournament.max_teams) * 2
+    : Number(tournament.max_teams || 0);
+
   if (
-    tournament.max_teams &&
-    (currentRegistrations || []).length >=
-      Number(tournament.max_teams)
+    registrationCapacity &&
+    (currentRegistrations || []).filter(r => String(r.status || "registered") !== "cancelled").length >=
+      registrationCapacity
   ) {
 
     showRegistrationError(
@@ -9084,7 +9205,7 @@ async function submitRegistration(tournamentId) {
     finalTeamName =
       member1.full_name;
 
-  } else if (!finalTeamName) {
+  } else if (!finalTeamName && !isAutoDoubles) {
 
     finalTeamName =
       (
@@ -9092,6 +9213,10 @@ async function submitRegistration(tournamentId) {
         " & " +
         member2.full_name
       );
+
+  } else if (isAutoDoubles) {
+
+    finalTeamName = member1.full_name;
 
   }
 
@@ -9137,7 +9262,7 @@ async function submitRegistration(tournamentId) {
 
   if (
     tournament.competition_type ===
-    "doubles"
+    "doubles" && !isAutoDoubles
   ) {
 
     payload.member2_id =
@@ -14572,10 +14697,10 @@ async function renderAdminPanel(){
 
   let adminUsers = [];
   if(isSuperAdmin()) {
-    // Chỉ thay phần tải danh sách tài khoản Chủ tịch CLB.
-    // Dùng RPC SECURITY DEFINER đã tạo trong Supabase để không bị RLS chặn.
     const { data: adminRows, error: adminRowsError } = await supabaseClient
-      .rpc("get_admin_users_for_super_admin");
+      .from("admin_users")
+      .select("user_id, role, club_name, permissions, is_active, created_at")
+      .order("created_at", { ascending:false });
     if(adminRowsError){
       console.warn("Không tải được danh sách quản trị:", adminRowsError);
     } else {
