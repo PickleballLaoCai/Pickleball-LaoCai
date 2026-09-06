@@ -17830,11 +17830,17 @@ function _v28BindCreateFormUi(form){
   const doubles=form.querySelector("#doublesChoice");
   const group=form.querySelector("#groupChoice");
   const direct=form.querySelector("#directChoice");
-  form.querySelectorAll('input[name="competitionType"]').forEach(x=>x.addEventListener("change",()=>{
+  const doublesModeField=form.querySelector("#doublesRegistrationModeField");
+  const refreshDoublesMode=()=>{
     const v=_v28Radio(form,"competitionType","singles");
     singles?.classList.toggle("selected",v==="singles");
     doubles?.classList.toggle("selected",v==="doubles");
-  }));
+    if(doublesModeField){
+      doublesModeField.style.setProperty("display", v==="doubles" ? "block" : "none", "important");
+    }
+  };
+  form.querySelectorAll('input[name="competitionType"]').forEach(x=>x.addEventListener("change",refreshDoublesMode));
+  refreshDoublesMode();
   form.querySelectorAll('input[name="tournamentFormat"]').forEach(x=>x.addEventListener("change",()=>{
     const v=_v28Radio(form,"tournamentFormat","double_elimination");
     group?.classList.toggle("selected",v==="group_stage");
