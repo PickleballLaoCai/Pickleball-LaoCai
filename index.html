@@ -4237,6 +4237,17 @@ document
   });
 
 
+// Hỗ trợ cả radio được tạo động trong modal Tạo giải đấu.
+// Modal có thể được render sau khi script khởi tạo, nên listener
+// querySelectorAll ở trên không bắt được radio mới.
+document.addEventListener("change", function(event){
+  const target = event.target;
+  if(target && target.matches('input[name="competitionType"]')){
+    refreshCompetitionChoices();
+  }
+});
+
+
 /* =========================================================
    12. ĐỔI TRẠNG THÁI Ô CHỌN HÌNH THỨC
 ========================================================= */
