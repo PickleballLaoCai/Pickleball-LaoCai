@@ -14724,10 +14724,9 @@ async function _loadClubPendingAssessmentsForMembers(clubMembers){
     .select("*")
     .in("member_id",ids)
     .eq("status","pending")
-    .eq("review_stage","club")
     .order("created_at",{ascending:false});
   if(error){
-    console.warn("Không tải được đề xuất chấm trình CLB:",error);
+    console.warn("Không tải được trạng thái chấm trình CLB:",error);
     return [];
   }
   return data || [];
@@ -14756,7 +14755,13 @@ async function renderClubRatingManager(){
 
   const pendingByMember=new Map();
   pending.forEach(a=>{
-    if(!pendingByMember.has(String(a.member_id))) pendingByMember.set(String(a.member_id),a);
+    const key=String(a.member_id);
+    const old=pendingByMember.get(key);
+    // Nếu tồn tại nhiều bản ghi pending do dữ liệu cũ, luôn ưu tiên
+    // bản đã chuyển Hội đồng (admin) hơn bản còn ở bước CLB.
+    if(!old || (String(a.review_stage||"") === "admin" && String(old.review_stage||"") !== "admin")){
+      pendingByMember.set(key,a);
+    }
   });
 
   const rows=clubMembers.map((m,i)=>{
@@ -14793,7 +14798,7 @@ async function renderClubRatingManager(){
         <button class="btn btn-danger" onclick="adminLogout()">Đăng xuất</button>
       </div>
       <div class="notice" style="margin-top:10px">
-        Danh sách dưới đây lấy trực tiếp từ <b>Thành viên → CLB</b>. Tên CLB được so sánh không phân biệt hoa/thường, dấu tiếng Việt và khoảng trắng thừa, nên thành viên mới ghi <b>${escapeHtml(currentAdmin.club_name || "")}</b> sẽ xuất hiện đúng tại đây.
+        Danh sách dưới đây lấy trực tiếp từ <b>Thành viên → CLB</b> và trạng thái đề xuất chấm trình. Tên CLB được so sánh không phân biệt hoa/thường, dấu tiếng Việt và khoảng trắng thừa, nên thành viên mới ghi <b>${escapeHtml(currentAdmin.club_name || "")}</b> sẽ xuất hiện đúng tại đây.
       </div>
       <h4 style="margin-top:18px">⭐ Danh sách VĐV thuộc CLB</h4>
       <div class="table-wrap">
@@ -14964,18 +14969,25 @@ async function clubReviewRatingAssessment(assessmentId, approve){
   if(!note){ showToast("Vui lòng nhập nhận xét / căn cứ chấm trình."); return; }
   if(!approve){
     if(!confirm("Xác nhận từ chối đề xuất chấm trình này?")) return;
-    const {error}=await supabaseClient.from("rating_assessments").update({
-      status:"rejected",
-      review_stage:"club",
-      club_reviewed_by:currentSession?.user?.id || null,
-      club_reviewed_at:new Date().toISOString(),
-      club_reviewer_note:note,
-      reviewed_by:currentSession?.user?.id || null,
-      reviewed_at:new Date().toISOString(),
-      reviewer_note:note,
-      rating_applied:false
-    }).eq("id",assessmentId);
-    if(error){ showToast("Không thể từ chối đề xuất: "+error.message); return; }
+    const {data,error}=await supabaseClient.rpc("club_review_rating_assessment",{
+      p_assessment_id:String(assessmentId),
+      p_approve:false,
+      p_technical:null,
+      p_tactical:null,
+      p_experience:null,
+      p_competition:null,
+      p_proposed_rating:null,
+      p_reviewer_note:note
+    });
+    if(error){
+      console.error("CLUB REVIEW REJECT:",error);
+      showToast("Không thể từ chối đề xuất: "+error.message);
+      return;
+    }
+    if(!data?.success){
+      showToast(data?.message || "Không thể từ chối đề xuất.");
+      return;
+    }
   }else{
     const technical=Number(document.getElementById("clubTechnical")?.value);
     const tactical=Number(document.getElementById("clubTactical")?.value);
@@ -14989,25 +15001,25 @@ async function clubReviewRatingAssessment(assessmentId, approve){
       showToast("Điểm trình đề xuất phải từ 1,00 đến 5,00."); return;
     }
     if(!confirm(`Xác nhận chấm ${formatRating(proposedRating)} và chuyển đề xuất lên Hội đồng cấp cao?`)) return;
-    const totalScore=technical*RATING_CONFIG.technicalWeight+tactical*RATING_CONFIG.tacticalWeight+experience*RATING_CONFIG.experienceWeight+competition*RATING_CONFIG.competitionWeight;
-    const calculatedProposedRating=Math.max(RATING_CONFIG.min,RATING_CONFIG.min+((totalScore-1)/9)*(RATING_CONFIG.initialMax-RATING_CONFIG.min));
-    const {error}=await supabaseClient.from("rating_assessments").update({
-      technical,tactical,experience,competition,
-      total_score:totalScore,
-      calculated_total_score:totalScore,
-      proposed_rating:proposedRating,
-      calculated_proposed_rating:calculatedProposedRating,
-      status:"pending",
-      review_stage:"admin",
-      club_reviewed_by:currentSession?.user?.id || null,
-      club_reviewed_at:new Date().toISOString(),
-      club_reviewer_note:note,
-      reviewed_by:currentSession?.user?.id || null,
-      reviewed_at:new Date().toISOString(),
-      reviewer_note:note,
-      rating_applied:false
-    }).eq("id",assessmentId);
-    if(error){ showToast("Không thể chuyển đề xuất lên Hội đồng: "+error.message); return; }
+    const {data,error}=await supabaseClient.rpc("club_review_rating_assessment",{
+      p_assessment_id:String(assessmentId),
+      p_approve:true,
+      p_technical:technical,
+      p_tactical:tactical,
+      p_experience:experience,
+      p_competition:competition,
+      p_proposed_rating:proposedRating,
+      p_reviewer_note:note
+    });
+    if(error){
+      console.error("CLUB REVIEW APPROVE:",error);
+      showToast("Không thể chuyển đề xuất lên Hội đồng: "+error.message);
+      return;
+    }
+    if(!data?.success || String(data?.review_stage||"") !== "admin"){
+      showToast(data?.message || "Đề xuất chưa được chuyển sang Hội đồng cấp cao.");
+      return;
+    }
   }
   closeModal();
   await refreshApplication();
