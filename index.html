@@ -14737,7 +14737,7 @@ async function renderClubRatingManager(){
     renderAdminPanel();
     return;
   }
-  if(!hasAdminPermission("review_club_rating")){
+  if(!hasAdminPermission("propose_rating")){
     openModal("⭐ Chấm trình VĐV CLB", `
       <div class="admin-panel">
         <div class="notice">Tài khoản Chủ tịch CLB chưa được cấp quyền <b>⭐ Chấm & đề xuất trình VĐV CLB</b>.</div>
@@ -14811,8 +14811,8 @@ async function renderClubRatingManager(){
 }
 
 function openClubDirectRatingModal(memberId){
-  if(!isClubAdmin() || !hasAdminPermission("review_club_rating")){
-    showToast("Tài khoản Chủ tịch CLB chưa được cấp quyền chấm trình VĐV CLB.");
+  if(!isClubAdmin() || !hasAdminPermission("propose_rating")){
+    showToast("Tài khoản Chủ tịch CLB chưa được cấp quyền gửi đề xuất chấm trình.");
     return;
   }
   const member=memberById(memberId);
@@ -14852,8 +14852,8 @@ function openClubDirectRatingModal(memberId){
 }
 
 async function submitClubDirectRating(memberId){
-  if(!isClubAdmin() || !hasAdminPermission("review_club_rating")){
-    showToast("Tài khoản Chủ tịch CLB chưa được cấp quyền chấm trình VĐV CLB.");
+  if(!isClubAdmin() || !hasAdminPermission("propose_rating")){
+    showToast("Tài khoản Chủ tịch CLB chưa được cấp quyền gửi đề xuất chấm trình.");
     return;
   }
   const member=memberById(memberId);
