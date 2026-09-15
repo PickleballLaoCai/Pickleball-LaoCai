@@ -3502,7 +3502,14 @@ const DEFAULT_CLUB_PERMISSIONS = {
 function normalizeAdminPermissions(raw){
   const src = (raw && typeof raw === "object") ? raw : {};
   return Object.keys(ADMIN_PERMISSION_LABELS).reduce((out,key)=>{
-    out[key] = src[key] === true;
+    if(key === "review_club_rating" && src[key] === undefined){
+      /* Tương thích tài khoản Chủ tịch CLB cũ: đã có quyền gửi đề xuất thì
+         mặc định được bật quyền chấm/đề xuất VĐV CLB. Khi Quản trị cấp cao
+         lưu lại bộ quyền, cờ này sẽ được ghi rõ vào permissions. */
+      out[key] = src.propose_rating === true;
+    }else{
+      out[key] = src[key] === true;
+    }
     return out;
   }, {});
 }
@@ -5465,17 +5472,6 @@ document
         }
 
         /* Chỉ lưu MỘT đề xuất. Không tự đổi members.rating. */
-        /*
-         * Thành viên thuộc CLB:
-         *   VĐV tự chấm → Chủ tịch CLB chấm/chỉnh → Hội đồng cấp cao.
-         * Thành viên tự do:
-         *   VĐV tự chấm → Hội đồng cấp cao.
-         * review_stage chỉ điều phối luồng, không thay đổi members.rating.
-         */
-        const selectedMember = memberById(memberId);
-        const memberClub = String(selectedMember?.club || "").trim();
-        const reviewStage = memberClub ? "club" : "admin";
-
         const { error: assessmentSaveError } =
           await supabaseClient
             .from("rating_assessments")
@@ -5490,7 +5486,6 @@ document
               proposed_rating: proposedRating,
               calculated_proposed_rating: calculatedProposedRating,
               status: "pending",
-              review_stage: reviewStage,
               reviewer_note: null
             });
 
@@ -14687,6 +14682,12 @@ function renderAdminTournamentManager(selectedId=null){
 
 function renderAdminRatingManager(){
   if(!isAdmin()){ openAdminPanel(); return; }
+
+  if(isClubAdmin()){
+    renderClubRatingManager();
+    return;
+  }
+
   renderAdminPanel();
   setTimeout(()=>{
     const body=document.getElementById("modalBody");
@@ -14697,157 +14698,320 @@ function renderAdminRatingManager(){
   },0);
 }
 
-async function getClubPendingRatingAssessments(){
-  if(!isClubAdmin() || !hasAdminPermission("review_club_rating")) return [];
-  const { data, error } = await supabaseClient
-    .rpc("get_club_rating_assessments");
+function _clubNameKey(value){
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/đ/g, "d")
+    .replace(/Đ/g, "D")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function _clubMembersForCurrentAdmin(){
+  if(!isClubAdmin()) return [];
+  const clubKey=_clubNameKey(currentAdmin?.club_name);
+  if(!clubKey) return [];
+  return (members || []).filter(m => _clubNameKey(m?.club) === clubKey);
+}
+
+async function _loadClubPendingAssessmentsForMembers(clubMembers){
+  const ids=(clubMembers || []).map(m=>m.id).filter(Boolean);
+  if(!ids.length) return [];
+  const {data,error}=await supabaseClient
+    .from("rating_assessments")
+    .select("*")
+    .in("member_id",ids)
+    .eq("status","pending")
+    .order("created_at",{ascending:false});
   if(error){
-    console.warn("Không tải được đề xuất chấm trình của CLB:", error);
-    showToast("Không tải được danh sách đề xuất chấm trình của CLB: " + error.message);
+    console.warn("Không tải được đề xuất chấm trình CLB:",error);
     return [];
   }
-  return Array.isArray(data) ? data : [];
+  return data || [];
+}
+
+async function renderClubRatingManager(){
+  if(!isClubAdmin()){
+    renderAdminPanel();
+    return;
+  }
+  if(!hasAdminPermission("review_club_rating")){
+    openModal("⭐ Chấm trình VĐV CLB", `
+      <div class="admin-panel">
+        <div class="notice">Tài khoản Chủ tịch CLB chưa được cấp quyền <b>⭐ Chấm & đề xuất trình VĐV CLB</b>.</div>
+        <div class="actions">
+          <button class="btn btn-secondary" onclick="renderAdminPanel()">← Quản trị</button>
+          <button class="btn btn-secondary" onclick="closeModal()">Đóng</button>
+        </div>
+      </div>`);
+    return;
+  }
+
+  const clubMembers=_clubMembersForCurrentAdmin();
+  const pending=await _loadClubPendingAssessmentsForMembers(clubMembers);
+  window.__clubDirectPending= pending;
+
+  const pendingByMember=new Map();
+  pending.forEach(a=>{
+    if(!pendingByMember.has(String(a.member_id))) pendingByMember.set(String(a.member_id),a);
+  });
+
+  const rows=clubMembers.map((m,i)=>{
+    const a=pendingByMember.get(String(m.id));
+    let statusHtml=`<span class="badge">Chưa có đề xuất</span>`;
+    let action=`<button class="btn btn-primary" style="padding:6px 9px" onclick="openClubDirectRatingModal('${escapeHtml(String(m.id))}')">⭐ Chấm trình</button>`;
+    if(a){
+      if(String(a.review_stage||"") === "admin"){
+        statusHtml=`<span class="badge badge-green">Đã chuyển Hội đồng</span>`;
+        action=`<span class="admin-role">Chờ Hội đồng cấp cao</span>`;
+      }else{
+        statusHtml=`<span class="badge badge-yellow">Chờ Chủ tịch chấm</span>`;
+        action=`<button class="btn btn-primary" style="padding:6px 9px" onclick="openClubRatingReviewModal('${escapeHtml(String(a.id))}')">✏️ Chấm / chỉnh</button>`;
+      }
+    }
+    return `<tr>
+      <td>${i+1}</td>
+      <td><b>${escapeHtml(m.full_name || "Không tên")}</b><div class="small muted">${escapeHtml(m.phone || m.phone_number || "")}</div></td>
+      <td><b>${formatRating(m.rating || 1)}</b></td>
+      <td>${statusHtml}</td>
+      <td>${action}</td>
+    </tr>`;
+  }).join("");
+
+  openModal("⭐ Chấm trình VĐV CLB", `
+    <div class="admin-panel">
+      <div class="chips">
+        <span class="admin-role">👑 Chủ tịch CLB</span>
+        <span class="chip">CLB: ${escapeHtml(currentAdmin.club_name || "")}</span>
+        <span class="chip">${clubMembers.length} thành viên</span>
+      </div>
+      <div class="actions">
+        <button class="btn btn-secondary" onclick="renderAdminPanel()">← Quản trị</button>
+        <button class="btn btn-danger" onclick="adminLogout()">Đăng xuất</button>
+      </div>
+      <div class="notice" style="margin-top:10px">
+        Danh sách dưới đây lấy trực tiếp từ <b>Thành viên → CLB</b>. Tên CLB được so sánh không phân biệt hoa/thường, dấu tiếng Việt và khoảng trắng thừa, nên thành viên mới ghi <b>${escapeHtml(currentAdmin.club_name || "")}</b> sẽ xuất hiện đúng tại đây.
+      </div>
+      <h4 style="margin-top:18px">⭐ Danh sách VĐV thuộc CLB</h4>
+      <div class="table-wrap">
+        <table class="admin-table">
+          <thead><tr><th>#</th><th>Thành viên</th><th>Trình hiện tại</th><th>Trạng thái chấm</th><th>Xử lý</th></tr></thead>
+          <tbody>${rows || `<tr><td colspan="5">Chưa có thành viên nào thuộc CLB <b>${escapeHtml(currentAdmin.club_name || "")}</b>.</td></tr>`}</tbody>
+        </table>
+      </div>
+    </div>`);
+}
+
+function openClubDirectRatingModal(memberId){
+  if(!isClubAdmin() || !hasAdminPermission("review_club_rating")){
+    showToast("Tài khoản Chủ tịch CLB chưa được cấp quyền chấm trình VĐV CLB.");
+    return;
+  }
+  const member=memberById(memberId);
+  if(!member){ showToast("Không tìm thấy thành viên."); return; }
+  if(_clubNameKey(member.club)!==_clubNameKey(currentAdmin.club_name)){
+    showToast("Chỉ được chấm trình VĐV thuộc CLB của mình.");
+    return;
+  }
+  const pending=(window.__clubDirectPending || []).find(a=>String(a.member_id)===String(member.id));
+  if(pending){
+    if(String(pending.review_stage||"")==="club"){
+      openClubRatingReviewModal(pending.id);
+    }else{
+      showToast("VĐV này đã có đề xuất đang chờ Hội đồng cấp cao.");
+    }
+    return;
+  }
+
+  const initial=Number(member.rating || 1);
+  openModal("⭐ Chấm trình VĐV CLB", `
+    <div class="admin-panel">
+      <div class="notice"><b>${escapeHtml(member.full_name || "Thành viên")}</b> — CLB: <b>${escapeHtml(member.club || currentAdmin.club_name || "")}</b> — trình hiện tại: <b>${formatRating(initial)}</b></div>
+      <p class="small muted">Chấm theo đúng thang 1–10 hiện đang dùng trong hệ thống. Sau khi gửi, đề xuất chuyển thẳng lên Hội đồng cấp cao; điểm chính thức chưa thay đổi.</p>
+      <div class="form-grid">
+        <div class="field"><label>Kỹ thuật · 40%</label><input id="clubDirectTechnical" type="number" min="1" max="10" step="0.01" value="5"></div>
+        <div class="field"><label>Chiến thuật · 25%</label><input id="clubDirectTactical" type="number" min="1" max="10" step="0.01" value="5"></div>
+        <div class="field"><label>Kinh nghiệm · 15%</label><input id="clubDirectExperience" type="number" min="1" max="10" step="0.01" value="5"></div>
+        <div class="field"><label>Thi đấu · 20%</label><input id="clubDirectCompetition" type="number" min="1" max="10" step="0.01" value="5"></div>
+      </div>
+      <div class="field"><label>Điểm trình đề xuất *</label><input id="clubDirectProposedRating" type="number" min="1" max="5" step="0.01" value="${initial.toFixed(2)}"></div>
+      <div class="field"><label>Nhận xét / căn cứ chấm trình *</label><textarea id="clubDirectReviewNote" rows="4" placeholder="Nêu căn cứ đánh giá VĐV..."></textarea></div>
+      <div class="actions">
+        <button class="btn btn-primary" onclick="submitClubDirectRating('${escapeHtml(String(member.id))}')">📤 Gửi Hội đồng cấp cao</button>
+        <button class="btn btn-secondary" onclick="renderClubRatingManager()">← Danh sách CLB</button>
+      </div>
+    </div>`);
+}
+
+async function submitClubDirectRating(memberId){
+  if(!isClubAdmin() || !hasAdminPermission("review_club_rating")){
+    showToast("Tài khoản Chủ tịch CLB chưa được cấp quyền chấm trình VĐV CLB.");
+    return;
+  }
+  const member=memberById(memberId);
+  if(!member || _clubNameKey(member.club)!==_clubNameKey(currentAdmin.club_name)){
+    showToast("Chỉ được chấm trình VĐV thuộc CLB của mình.");
+    return;
+  }
+  const technical=Number(document.getElementById("clubDirectTechnical")?.value);
+  const tactical=Number(document.getElementById("clubDirectTactical")?.value);
+  const experience=Number(document.getElementById("clubDirectExperience")?.value);
+  const competition=Number(document.getElementById("clubDirectCompetition")?.value);
+  const proposedRating=Number(document.getElementById("clubDirectProposedRating")?.value);
+  const note=document.getElementById("clubDirectReviewNote")?.value.trim() || "";
+
+  if([technical,tactical,experience,competition].some(v=>!Number.isFinite(v)||v<1||v>10)){
+    showToast("4 tiêu chí phải nằm trong khoảng 1–10."); return;
+  }
+  if(!Number.isFinite(proposedRating)||proposedRating<1||proposedRating>5){
+    showToast("Điểm trình đề xuất phải từ 1,00 đến 5,00."); return;
+  }
+  if(!note){ showToast("Vui lòng nhập nhận xét / căn cứ chấm trình."); return; }
+
+  const {data:existing,error:existingError}=await supabaseClient
+    .from("rating_assessments")
+    .select("id,review_stage")
+    .eq("member_id",Number(memberId))
+    .eq("status","pending")
+    .limit(1);
+  if(existingError){ showToast("Không kiểm tra được đề xuất đang chờ: "+existingError.message); return; }
+  if(existing?.length){
+    showToast("VĐV này đã có một đề xuất chấm trình đang chờ xử lý.");
+    await renderClubRatingManager();
+    return;
+  }
+
+  const totalScore=technical*RATING_CONFIG.technicalWeight+tactical*RATING_CONFIG.tacticalWeight+experience*RATING_CONFIG.experienceWeight+competition*RATING_CONFIG.competitionWeight;
+  const calculatedProposedRating=Math.max(RATING_CONFIG.min,RATING_CONFIG.min+((totalScore-1)/9)*(RATING_CONFIG.initialMax-RATING_CONFIG.min));
+
+  if(!confirm(`Gửi đề xuất ${formatRating(proposedRating)} của ${member.full_name||"VĐV"} lên Hội đồng cấp cao?`)) return;
+
+  const {error}=await supabaseClient.from("rating_assessments").insert({
+    member_id:Number(memberId),
+    technical,
+    tactical,
+    experience,
+    competition,
+    total_score:totalScore,
+    calculated_total_score:totalScore,
+    proposed_rating:proposedRating,
+    calculated_proposed_rating:calculatedProposedRating,
+    status:"pending",
+    review_stage:"admin",
+    club_reviewed_by:currentSession?.user?.id || null,
+    club_reviewed_at:new Date().toISOString(),
+    club_reviewer_note:note,
+    reviewer_note:note,
+    rating_applied:false
+  });
+  if(error){
+    console.error("CLUB DIRECT RATING:",error);
+    showToast("Không thể lưu đề xuất chấm trình: "+error.message);
+    return;
+  }
+
+  await refreshApplication();
+  await renderClubRatingManager();
+  showToast("Đã gửi đề xuất chấm trình lên Hội đồng cấp cao.");
 }
 
 function openClubRatingReviewModal(assessmentId){
   if(!isClubAdmin() || !hasAdminPermission("review_club_rating")){
-    showToast("Tài khoản Chủ tịch CLB chưa được cấp quyền chấm & đề xuất trình VĐV CLB.");
+    showToast("Tài khoản Chủ tịch CLB chưa được cấp quyền chấm trình VĐV CLB.");
     return;
   }
-
-  const assessment = window.__clubPendingAssessments?.find(
-    x => String(x.id) === String(assessmentId)
-  );
-  if(!assessment){
-    showToast("Không tìm thấy đề xuất chấm trình của VĐV.");
-    return;
+  const assessment=(window.__clubDirectPending || []).find(x=>String(x.id)===String(assessmentId));
+  if(!assessment){ showToast("Không tìm thấy đề xuất chấm trình của VĐV."); return; }
+  const member=memberById(assessment.member_id);
+  if(!member || _clubNameKey(member.club)!==_clubNameKey(currentAdmin.club_name)){
+    showToast("Bạn chỉ được xử lý VĐV thuộc CLB của mình."); return;
   }
-
-  const member = memberById(assessment.member_id);
-  if(!member){
-    showToast("Không tìm thấy thành viên.");
-    return;
-  }
-
-  const initialRating = Number(assessment.proposed_rating || member.rating || 1);
+  const initial=Number(assessment.proposed_rating || member.rating || 1);
   openModal("⭐ Chấm & đề xuất trình VĐV CLB", `
     <div class="admin-panel">
-      <div class="notice">
-        <b>${escapeHtml(member.full_name || "Thành viên")}</b>
-        — CLB: <b>${escapeHtml(member.club || currentAdmin.club_name || "")}</b>
-        — trình hiện tại: <b>${formatRating(member.rating || 1)}</b>
-      </div>
-
+      <div class="notice"><b>${escapeHtml(member.full_name || "Thành viên")}</b> — CLB: <b>${escapeHtml(member.club || currentAdmin.club_name || "")}</b> — trình hiện tại: <b>${formatRating(member.rating || 1)}</b></div>
       <div class="form-grid">
-        <div class="field">
-          <label>Kỹ thuật</label>
-          <input id="clubTechnical" type="number" min="0" max="5" step="0.01"
-            value="${Number(assessment.technical || 0)}">
-        </div>
-        <div class="field">
-          <label>Chiến thuật</label>
-          <input id="clubTactical" type="number" min="0" max="5" step="0.01"
-            value="${Number(assessment.tactical || 0)}">
-        </div>
-        <div class="field">
-          <label>Kinh nghiệm</label>
-          <input id="clubExperience" type="number" min="0" max="5" step="0.01"
-            value="${Number(assessment.experience || 0)}">
-        </div>
-        <div class="field">
-          <label>Thi đấu</label>
-          <input id="clubCompetition" type="number" min="0" max="5" step="0.01"
-            value="${Number(assessment.competition || 0)}">
-        </div>
+        <div class="field"><label>Kỹ thuật · 40%</label><input id="clubTechnical" type="number" min="1" max="10" step="0.01" value="${Number(assessment.technical || 5)}"></div>
+        <div class="field"><label>Chiến thuật · 25%</label><input id="clubTactical" type="number" min="1" max="10" step="0.01" value="${Number(assessment.tactical || 5)}"></div>
+        <div class="field"><label>Kinh nghiệm · 15%</label><input id="clubExperience" type="number" min="1" max="10" step="0.01" value="${Number(assessment.experience || 5)}"></div>
+        <div class="field"><label>Thi đấu · 20%</label><input id="clubCompetition" type="number" min="1" max="10" step="0.01" value="${Number(assessment.competition || 5)}"></div>
       </div>
-
-      <div class="field">
-        <label>Điểm trình đề xuất lên Hội đồng cấp cao *</label>
-        <input id="clubProposedRating" type="number" min="1" max="5" step="0.01"
-          value="${initialRating.toFixed(2)}">
-      </div>
-
-      <div class="field">
-        <label>Nhận xét / căn cứ chấm trình của Chủ tịch CLB *</label>
-        <textarea id="clubReviewNote" rows="4"
-          placeholder="Nêu căn cứ đánh giá VĐV..."></textarea>
-      </div>
-
+      <div class="field"><label>Điểm trình đề xuất lên Hội đồng cấp cao *</label><input id="clubProposedRating" type="number" min="1" max="5" step="0.01" value="${initial.toFixed(2)}"></div>
+      <div class="field"><label>Nhận xét / căn cứ chấm trình của Chủ tịch CLB *</label><textarea id="clubReviewNote" rows="4" placeholder="Nêu căn cứ đánh giá VĐV..."></textarea></div>
       <div class="actions">
-        <button class="btn btn-primary"
-          onclick="clubReviewRatingAssessment('${escapeHtml(String(assessment.id))}', true)">
-          📤 Duyệt & chuyển Hội đồng
-        </button>
-        <button class="btn btn-danger"
-          onclick="clubReviewRatingAssessment('${escapeHtml(String(assessment.id))}', false)">
-          ❌ Từ chối
-        </button>
-        <button class="btn btn-secondary" onclick="closeModal()">Huỷ</button>
+        <button class="btn btn-primary" onclick="clubReviewRatingAssessment('${escapeHtml(String(assessment.id))}',true)">📤 Duyệt & chuyển Hội đồng</button>
+        <button class="btn btn-danger" onclick="clubReviewRatingAssessment('${escapeHtml(String(assessment.id))}',false)">❌ Từ chối</button>
+        <button class="btn btn-secondary" onclick="renderClubRatingManager()">← Danh sách CLB</button>
       </div>
-    </div>
-  `);
+    </div>`);
 }
 
 async function clubReviewRatingAssessment(assessmentId, approve){
   if(!isClubAdmin() || !hasAdminPermission("review_club_rating")){
-    showToast("Tài khoản Chủ tịch CLB chưa được cấp quyền chấm & đề xuất trình VĐV CLB.");
+    showToast("Tài khoản Chủ tịch CLB chưa được cấp quyền chấm trình VĐV CLB.");
     return;
   }
-
-  const note = document.getElementById("clubReviewNote")?.value.trim() || "";
-  if(!note){
-    showToast("Vui lòng nhập nhận xét / căn cứ chấm trình.");
-    return;
+  const assessment=(window.__clubDirectPending || []).find(x=>String(x.id)===String(assessmentId));
+  if(!assessment){ showToast("Không tìm thấy đề xuất chấm trình của VĐV."); return; }
+  const member=memberById(assessment.member_id);
+  if(!member || _clubNameKey(member.club)!==_clubNameKey(currentAdmin.club_name)){
+    showToast("Bạn chỉ được xử lý VĐV thuộc CLB của mình."); return;
   }
-
-  const technical = Number(document.getElementById("clubTechnical")?.value);
-  const tactical = Number(document.getElementById("clubTactical")?.value);
-  const experience = Number(document.getElementById("clubExperience")?.value);
-  const competition = Number(document.getElementById("clubCompetition")?.value);
-  const proposedRating = Number(document.getElementById("clubProposedRating")?.value);
-
-  if(approve){
-    if([technical,tactical,experience,competition].some(v => !Number.isFinite(v) || v < 0 || v > 5)){
-      showToast("Các tiêu chí chấm trình phải nằm trong khoảng 0–5.");
-      return;
+  const note=document.getElementById("clubReviewNote")?.value.trim() || "";
+  if(!note){ showToast("Vui lòng nhập nhận xét / căn cứ chấm trình."); return; }
+  if(!approve){
+    if(!confirm("Xác nhận từ chối đề xuất chấm trình này?")) return;
+    const {error}=await supabaseClient.from("rating_assessments").update({
+      status:"rejected",
+      review_stage:"club",
+      club_reviewed_by:currentSession?.user?.id || null,
+      club_reviewed_at:new Date().toISOString(),
+      club_reviewer_note:note,
+      reviewed_by:currentSession?.user?.id || null,
+      reviewed_at:new Date().toISOString(),
+      reviewer_note:note,
+      rating_applied:false
+    }).eq("id",assessmentId);
+    if(error){ showToast("Không thể từ chối đề xuất: "+error.message); return; }
+  }else{
+    const technical=Number(document.getElementById("clubTechnical")?.value);
+    const tactical=Number(document.getElementById("clubTactical")?.value);
+    const experience=Number(document.getElementById("clubExperience")?.value);
+    const competition=Number(document.getElementById("clubCompetition")?.value);
+    const proposedRating=Number(document.getElementById("clubProposedRating")?.value);
+    if([technical,tactical,experience,competition].some(v=>!Number.isFinite(v)||v<1||v>10)){
+      showToast("4 tiêu chí phải nằm trong khoảng 1–10."); return;
     }
-    if(!Number.isFinite(proposedRating) || proposedRating < 1 || proposedRating > 5){
-      showToast("Điểm trình đề xuất phải từ 1,00 đến 5,00.");
-      return;
+    if(!Number.isFinite(proposedRating)||proposedRating<1||proposedRating>5){
+      showToast("Điểm trình đề xuất phải từ 1,00 đến 5,00."); return;
     }
+    if(!confirm(`Xác nhận chấm ${formatRating(proposedRating)} và chuyển đề xuất lên Hội đồng cấp cao?`)) return;
+    const totalScore=technical*RATING_CONFIG.technicalWeight+tactical*RATING_CONFIG.tacticalWeight+experience*RATING_CONFIG.experienceWeight+competition*RATING_CONFIG.competitionWeight;
+    const calculatedProposedRating=Math.max(RATING_CONFIG.min,RATING_CONFIG.min+((totalScore-1)/9)*(RATING_CONFIG.initialMax-RATING_CONFIG.min));
+    const {error}=await supabaseClient.from("rating_assessments").update({
+      technical,tactical,experience,competition,
+      total_score:totalScore,
+      calculated_total_score:totalScore,
+      proposed_rating:proposedRating,
+      calculated_proposed_rating:calculatedProposedRating,
+      status:"pending",
+      review_stage:"admin",
+      club_reviewed_by:currentSession?.user?.id || null,
+      club_reviewed_at:new Date().toISOString(),
+      club_reviewer_note:note,
+      reviewed_by:currentSession?.user?.id || null,
+      reviewed_at:new Date().toISOString(),
+      reviewer_note:note,
+      rating_applied:false
+    }).eq("id",assessmentId);
+    if(error){ showToast("Không thể chuyển đề xuất lên Hội đồng: "+error.message); return; }
   }
-
-  if(!confirm(
-    approve
-      ? `Xác nhận chấm ${formatRating(proposedRating)} và chuyển đề xuất này lên Hội đồng cấp cao?`
-      : "Xác nhận từ chối đề xuất chấm trình này?"
-  )) return;
-
-  const { data, error } = await supabaseClient.rpc("club_review_rating_assessment", {
-    p_assessment_id: String(assessmentId),
-    p_approve: !!approve,
-    p_technical: approve ? technical : null,
-    p_tactical: approve ? tactical : null,
-    p_experience: approve ? experience : null,
-    p_competition: approve ? competition : null,
-    p_proposed_rating: approve ? proposedRating : null,
-    p_reviewer_note: note
-  });
-
-  if(error){
-    console.error("CLUB REVIEW RATING:", error);
-    showToast("Không thể xử lý đề xuất: " + error.message);
-    return;
-  }
-
   closeModal();
   await refreshApplication();
-  await renderAdminPanel();
-  showToast(
-    approve
-      ? "Đã chấm/chỉnh trình và chuyển đề xuất lên Hội đồng cấp cao."
-      : "Đã từ chối đề xuất chấm trình."
-  );
+  await renderClubRatingManager();
+  showToast(approve?"Đã chấm/chỉnh trình và chuyển đề xuất lên Hội đồng cấp cao.":"Đã từ chối đề xuất chấm trình.");
 }
 
 async function renderAdminPanel(){
@@ -14856,28 +15020,18 @@ async function renderAdminPanel(){
     return;
   }
 
-  let assessments = [];
-  let assessmentError = null;
-
-  if(isSuperAdmin()){
-    const result = await supabaseClient
-      .from("rating_assessments")
-      .select("*")
-      .eq("status","pending")
-      .eq("review_stage","admin")
-      .order("created_at",{ascending:false});
-    assessments = result.data || [];
-    assessmentError = result.error;
-  }else if(isClubAdmin() && hasAdminPermission("review_club_rating")){
-    assessments = await getClubPendingRatingAssessments();
-  }
+  const { data: assessments, error: assessmentError } = await supabaseClient
+    .from("rating_assessments")
+    .select("*")
+    .eq("status","pending")
+    .neq("review_stage","club")
+    .order("created_at",{ascending:false});
 
   if(assessmentError){
     console.error(assessmentError);
   }
 
   window.__pendingAssessments = assessments || [];
-  window.__clubPendingAssessments = isClubAdmin() ? (assessments || []) : [];
 
   const { data: feedbackRows, error: feedbackError } = await supabaseClient
     .rpc("get_rating_feedback_admin", { limit_count: 100 });
@@ -14886,10 +15040,9 @@ async function renderAdminPanel(){
 
   let adminUsers = [];
   if(isSuperAdmin()) {
-    const { data: adminRows, error: adminRowsError } = await supabaseClient
-      .from("admin_users")
-      .select("user_id, role, club_name, permissions, is_active, created_at")
-      .order("created_at", { ascending:false });
+    /* Dùng RPC SECURITY DEFINER để không bị RLS làm ẩn danh sách Chủ tịch CLB. */
+    const { data: adminRows, error: adminRowsError } =
+      await supabaseClient.rpc("get_admin_users_for_super_admin");
     if(adminRowsError){
       console.warn("Không tải được danh sách quản trị:", adminRowsError);
     } else {
@@ -14938,9 +15091,7 @@ async function renderAdminPanel(){
             ? `<button class="btn btn-primary" style="padding:6px 9px" onclick="openManualRatingModal('${a.member_id}',${Number(a.proposed_rating)||1},'${a.id}')">✏️ Chỉnh & chốt</button>
                <button class="btn btn-secondary" style="padding:6px 9px" onclick="approveRatingAssessment('${a.id}',true)">✓ Chốt đề xuất</button>
                <button class="btn btn-danger" style="padding:6px 9px" onclick="approveRatingAssessment('${a.id}',false)">Từ chối</button>`
-            : hasAdminPermission("review_club_rating")
-              ? `<button class="btn btn-primary" style="padding:6px 9px" onclick="openClubRatingReviewModal('${a.id}')">✏️ Chấm / chỉnh trình</button>`
-              : `<span class="admin-role">Chưa được cấp quyền chấm trình CLB</span>`}
+            : `<span class="admin-role">Chờ Hội đồng cấp cao</span>`}
         </td>
       </tr>`;
   }).join("");
@@ -15006,11 +15157,11 @@ async function renderAdminPanel(){
         </table>
       </div>
 
-      <h4 style="margin-top:20px">${isClubAdmin() ? "⭐ Chấm trình VĐV CLB" : "⭐ Đề xuất chấm trình chờ Hội đồng duyệt"}</h4>
+      <h4 style="margin-top:20px">⭐ Đề xuất chấm trình chờ duyệt</h4>
       <div class="table-wrap">
         <table class="admin-table">
           <thead><tr><th>Thành viên</th><th>Điểm đề xuất</th><th>Tổng tự chấm</th><th>Thời gian</th><th>Xử lý</th></tr></thead>
-          <tbody>${pendingHtml || `<tr><td colspan="5">${isClubAdmin() ? "Không có đề xuất chấm trình của VĐV CLB đang chờ xử lý." : "Không có đề xuất chờ Hội đồng duyệt."}</td></tr>`}</tbody>
+          <tbody>${pendingHtml || `<tr><td colspan="5">Không có đề xuất chờ duyệt.</td></tr>`}</tbody>
         </table>
       </div>
 
@@ -15023,7 +15174,7 @@ async function renderAdminPanel(){
       </div>
 
       <div class="notice" style="margin-top:16px">
-        <b>Quyền:</b> Chủ tịch CLB chỉ thực hiện được các tác vụ đã được Quản trị cấp cao cấp riêng. Với quyền <b>⭐ Chấm & đề xuất trình VĐV CLB</b>, Chủ tịch chỉ được chấm/chỉnh VĐV thuộc CLB mình và chuyển đề xuất lên Hội đồng cấp cao; Chủ tịch <b>không chốt rating cuối cùng</b>. Chủ tịch CLB <b>không được xoá giải</b>. Quản trị cấp cao có toàn quyền.
+        <b>Quyền:</b> Chủ tịch CLB chỉ thực hiện được các tác vụ đã được Quản trị cấp cao cấp riêng. Chủ tịch CLB <b>không được xoá giải</b> và không quyết định rating cuối cùng. Quản trị cấp cao có toàn quyền.
       </div>
     </div>
   `);
