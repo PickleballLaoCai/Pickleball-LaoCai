@@ -2844,22 +2844,6 @@ th{
 
           </div>
 
-          <div class="field" id="doublesRegistrationModeField" style="display:none; margin-top:12px;">
-            <label>Cách đăng ký giải đôi *</label>
-            <div class="format-box">
-              <label class="format-choice selected">
-                <input type="radio" name="doublesRegistrationMode" value="team" checked>
-                👥 <strong>Đăng ký theo đôi</strong><br>
-                <span class="small muted">Hai thành viên đăng ký cùng nhau.</span>
-              </label>
-              <label class="format-choice">
-                <input type="radio" name="doublesRegistrationMode" value="individual_auto">
-                🎲 <strong>Đăng ký 1 người – tự ghép đôi</strong><br>
-                <span class="small muted">Hệ thống ghép cặp cân trình sau khi đăng ký.</span>
-              </label>
-            </div>
-          </div>
-
         </div>
 
 
@@ -3486,7 +3470,8 @@ const ADMIN_PERMISSION_LABELS = {
   manage_tournament: "⚙️ Quản lý giải của mình",
   enter_results: "📝 Nhập kết quả trận",
   confirm_payment: "💳 Xác nhận nộp phí",
-  propose_rating: "📊 Gửi đề xuất chấm trình"
+  propose_rating: "📊 Gửi đề xuất chấm trình",
+  review_club_rating: "⭐ Chấm & đề xuất trình VĐV CLB"
 };
 
 const DEFAULT_CLUB_PERMISSIONS = {
@@ -3494,7 +3479,8 @@ const DEFAULT_CLUB_PERMISSIONS = {
   manage_tournament: true,
   enter_results: true,
   confirm_payment: true,
-  propose_rating: true
+  propose_rating: true,
+  review_club_rating: true
 };
 
 function normalizeAdminPermissions(raw){
@@ -4217,9 +4203,6 @@ function refreshCompetitionChoices(){
     selected === "doubles"
   );
 
-  const modeField = document.getElementById("doublesRegistrationModeField");
-  if(modeField) modeField.style.display = selected === "doubles" ? "block" : "none";
-
 }
 
 
@@ -4235,17 +4218,6 @@ document
     );
 
   });
-
-
-// Hỗ trợ cả radio được tạo động trong modal Tạo giải đấu.
-// Modal có thể được render sau khi script khởi tạo, nên listener
-// querySelectorAll ở trên không bắt được radio mới.
-document.addEventListener("change", function(event){
-  const target = event.target;
-  if(target && target.matches('input[name="competitionType"]')){
-    refreshCompetitionChoices();
-  }
-});
 
 
 /* =========================================================
@@ -5462,7 +5434,23 @@ document
           if(!ok) return;
         }
 
-        /* Chỉ lưu MỘT đề xuất. Không tự đổi members.rating. */
+        /*
+         * Thành viên thuộc CLB:
+         *   VĐV tự chấm → Chủ tịch CLB chấm/chỉnh → chuyển Hội đồng cấp cao.
+         * Thành viên tự do:
+         *   VĐV tự chấm → chuyển thẳng Hội đồng cấp cao.
+         *
+         * Không tự đổi members.rating ở bước này.
+         */
+        const selectedMember = memberById(memberId);
+        const memberClub = String(selectedMember?.club || "").trim();
+        const reviewStage = memberClub ? "club" : "admin";
+        /*
+         * Giữ status="pending" để không phá các CHECK/flow cũ.
+         * review_stage mới phân biệt chờ Chủ tịch CLB hay chờ Hội đồng.
+         */
+        const initialStatus = "pending";
+
         const { error: assessmentSaveError } =
           await supabaseClient
             .from("rating_assessments")
@@ -5476,7 +5464,8 @@ document
               calculated_total_score: calculatedTotalScore,
               proposed_rating: proposedRating,
               calculated_proposed_rating: calculatedProposedRating,
-              status: "pending",
+              status: initialStatus,
+              review_stage: reviewStage,
               reviewer_note: null
             });
 
@@ -5487,7 +5476,9 @@ document
         alert(
           "Đã gửi đề xuất chấm trình " +
           formatRating(proposedRating) +
-          ". Chờ Hội đồng chấm trình xem xét và quyết định."
+          (memberClub
+            ? ". Đề xuất đã chuyển Chủ tịch CLB xử lý trước khi gửi Hội đồng cấp cao."
+            : ". Thành viên tự do nên đề xuất được chuyển thẳng Hội đồng cấp cao.")
         );
 
       }catch(error){
@@ -6519,9 +6510,6 @@ document
         const tournamentFormat =
           selectedTournamentFormat();
 
-        const doublesRegistrationMode =
-          document.querySelector('input[name="doublesRegistrationMode"]:checked')?.value || "team";
-
 
         const date =
           document
@@ -6639,10 +6627,6 @@ document
           competition_type:
 
             competitionType,
-
-          registration_mode:
-
-            competitionType === "doubles" ? doublesRegistrationMode : "team",
 
           rating_limit:
 
@@ -6898,8 +6882,7 @@ function registrationsForTournament(
       ===
       String(
         tournamentId
-      ) &&
-      String(registration.status || "registered") !== "paired_member"
+      )
 
   );
 
@@ -7425,7 +7408,7 @@ async function renderTournamentPanel() {
 
       <div class="registration-list">
         ${
-          tournamentRegistrations.filter(r => String(r.status || "registered") !== "paired_member")
+          tournamentRegistrations
             .map((reg, index) => {
 
               const member1 = members.find(m => String(m.id) === String(reg.member_id));
@@ -8026,7 +8009,7 @@ async function renderTournamentPanel() {
 
 
           <span class="chip">
-            ${tournamentRegistrations.filter(r => String(r.status || "registered") !== "paired_member").length}
+            ${tournamentRegistrations.length}
             ${
               tournament.competition_type ===
               "doubles"
@@ -8099,17 +8082,13 @@ async function renderTournamentPanel() {
 
 
       <div class="notice" style="margin-top:12px;">
-        💰 <b>Phí:</b> ${paidRegistrationsForTournament(tournament.id).length}/${registrationsForTournament(tournament.id).filter(r => String(r.status || "registered") !== "cancelled").length} đội/người đã xác nhận nộp phí.
+        💰 <b>Phí:</b> ${paidRegistrationsForTournament(tournament.id).length}/${tournamentRegistrations.filter(r => String(r.status || "registered") !== "cancelled").length} đội/người đã xác nhận nộp phí.
         <br><span class="muted">Chỉ các đội đã <b>Đã nộp phí</b> mới được đưa vào bảng đấu/lịch thi đấu. Đội chưa nộp phí sẽ không được xếp trận.</span>
       </div>
       ${isAdmin() && canManageTournament(tournament) ? `
         <div class="row-actions" style="margin-top:10px;">
           <button class="btn primary" onclick="openRegistrationModal('${tournament.id}')">➕ Thêm đội/người thi đấu</button>
-          ${tournament.competition_type === "doubles" && String(tournament.registration_mode || "team") === "individual_auto" ? `<button class="btn btn-secondary" onclick="autoPairIndividualDoubles('${tournament.id}')">🎲 Tự ghép đôi cân trình</button>` : ""}
         </div>` : ""}
-
-      ${tournament.competition_type === "doubles" && String(tournament.registration_mode || "team") === "individual_auto" ? `
-        <div class="notice" style="margin-top:10px;">🎲 <b>Giải đôi đăng ký cá nhân:</b> mỗi người đăng ký riêng. BTC ghép cao với thấp theo tổng trình, xác nhận cặp xong mới đưa các đôi vào sắp bảng/loại trực tiếp.</div>` : ""}
 
       <div class="card" style="margin-top:12px;">
         <div class="section-title">💰 Danh sách đã nộp phí</div>
@@ -8569,18 +8548,16 @@ function openRegistrationModal(tournamentId) {
   }
 
   const isDoubles = tournament.competition_type === "doubles";
-  const isAutoDoubles = isDoubles && String(tournament.registration_mode || "team") === "individual_auto";
   currentTournamentId = tournament.id;
   const currentCount = registrationsForTournament(tournament.id)
     .filter(r => String(r.status || "registered") !== "cancelled").length;
   const maxTeams = Number(tournament.max_teams || 0);
-  const capacity = isAutoDoubles && maxTeams > 0 ? maxTeams * 2 : maxTeams;
-  const remaining = capacity > 0 ? Math.max(0, capacity - currentCount) : null;
+  const remaining = maxTeams > 0 ? Math.max(0, maxTeams - currentCount) : null;
 
   openModal(`
     <div class="modal-head">
       <div>
-        <h3>${isAutoDoubles ? "🏆 Đăng ký cá nhân – tự ghép đôi" : (isDoubles ? "🏆 Đăng ký đội đôi" : "🏆 Đăng ký thi đấu đơn")}</h3>
+        <h3>${isDoubles ? "🏆 Đăng ký đội đôi" : "🏆 Đăng ký thi đấu đơn"}</h3>
         <div class="muted">${escapeHtml(tournament.name || "Giải đấu")}</div>
       </div>
       <button class="icon-btn" onclick="closeModal()">✕</button>
@@ -8597,7 +8574,7 @@ function openRegistrationModal(tournamentId) {
       </div>
       <div class="registration-stat success">
         <span>Đã đăng ký</span>
-        <strong>${currentCount}${capacity ? " / " + capacity : ""}</strong>
+        <strong>${currentCount}${maxTeams ? " / " + maxTeams : ""}</strong>
       </div>
       <div class="registration-stat neutral">
         <span>Còn chỗ</span>
@@ -8608,7 +8585,7 @@ function openRegistrationModal(tournamentId) {
     <div class="notice">
       <strong>📌 Cách đăng ký</strong><br>
       Nhập số điện thoại để hệ thống tự tìm thành viên và lấy trình hiện tại.
-      ${isAutoDoubles ? " Đánh đôi đăng ký từng người; BTC sẽ tự ghép các cặp cân trình sau khi đủ người." : (isDoubles ? " Đánh đôi gồm 2 thành viên." : "")}
+      ${isDoubles ? " Đánh đôi gồm 2 thành viên." : ""}
       <br>
       <span class="muted">🔴 Nếu tổng trình vượt giới hạn của giải, vẫn được đăng ký nhưng hệ thống sẽ cảnh báo để Ban tổ chức xem xét.</span>
     </div>
@@ -8623,7 +8600,7 @@ function openRegistrationModal(tournamentId) {
       </div>
     </div>
 
-    ${isDoubles && !isAutoDoubles ? `
+    ${isDoubles ? `
       <div class="form-group">
         <label>Số điện thoại thành viên 2 *</label>
         <input id="regPhone2" type="tel" inputmode="numeric" autocomplete="off"
@@ -8868,86 +8845,6 @@ function syncPartnerOptions(){
 
 
 /* =========================================================
-   GIẢI ĐÔI ĐĂNG KÝ CÁ NHÂN — TỰ GHÉP CÂN TRÌNH
-   ---------------------------------------------------------
-   Chỉ thêm lớp ghép đôi trước engine hiện tại.
-   Sau khi xác nhận, mỗi cặp được lưu thành một registration
-   có member_id + member2_id nên engine chia bảng/loại trực tiếp
-   hiện có vẫn nhận đúng danh sách đội như trước.
-========================================================= */
-async function autoPairIndividualDoubles(tournamentId){
-  if(!isAdmin()) { showToast("Chỉ quản trị mới được ghép đôi."); return; }
-  const tournament=tournamentById(tournamentId);
-  if(!tournament || tournament.competition_type!=="doubles" || String(tournament.registration_mode||"team")!=="individual_auto") {
-    showToast("Giải này không phải giải đôi đăng ký cá nhân."); return;
-  }
-  if(!canManageTournament(tournament)) { showToast("Bạn không có quyền quản lý giải này."); return; }
-
-  const activeRegs=registrationsForTournament(tournamentId)
-    .filter(r=>String(r.status||"registered")==="registered" && !r.member2_id);
-  if(activeRegs.length < 2) { showToast("Chưa đủ người để ghép đôi."); return; }
-  if(activeRegs.length % 2 !== 0) { showToast("Số người đăng ký đang là số lẻ. Cần thêm 1 người trước khi ghép."); return; }
-
-  const existingMatches=getTournamentMatches(tournamentId);
-  if(existingMatches.length){ showToast("Giải đã có trận đấu, không thể ghép lại để tránh thay đổi dữ liệu."); return; }
-
-  if(activeRegs.some(r=>String(r.payment_status||"unpaid")==="paid_confirmed")){
-    showToast("Hãy ghép đôi trước khi xác nhận nộp phí."); return;
-  }
-
-  const rows=activeRegs.map(r=>{
-    const m=memberById(r.member_id);
-    return {reg:r, member:m, rating:Number(m?.rating||1)};
-  }).filter(x=>x.member);
-  if(rows.length!==activeRegs.length){ showToast("Có người đăng ký không còn trong danh sách thành viên."); return; }
-
-  // Ghép cao với thấp để tổng trình các đôi sát nhau; xáo nhẹ trong cùng mức trình.
-  rows.sort((a,b)=>b.rating-a.rating || Math.random()-0.5);
-  const pairs=[];
-  for(let i=0;i<rows.length/2;i++){
-    const a=rows[i], b=rows[rows.length-1-i];
-    pairs.push({a,b,total:a.rating+b.rating});
-  }
-  pairs.sort((a,b)=>b.total-a.total);
-
-  const ok=confirm(
-    `Hệ thống sẽ ghép ${pairs.length} đôi từ ${rows.length} người theo tổng trình cân bằng.\n\n`+
-    pairs.map((p,i)=>`${i+1}. ${p.a.member.full_name} (${formatRating(p.a.rating)}) + ${p.b.member.full_name} (${formatRating(p.b.rating)}) = ${formatRating(p.total)}`).join("\n")+
-    `\n\nXác nhận ghép các cặp này?`
-  );
-  if(!ok) return;
-
-  try{
-    for(const p of pairs){
-      const survivor=p.a.reg;
-      const partner=p.b.reg;
-      const teamName=`${p.a.member.full_name} & ${p.b.member.full_name}`;
-      const {data,error}=await supabaseClient
-        .from("tournament_registrations")
-        .update({member2_id:p.b.member.id, partner_name:p.b.member.full_name, team_name:teamName, status:"registered"})
-        .eq("id",survivor.id).select().single();
-      if(error) throw error;
-      // Dòng đăng ký thứ hai được giữ lại trong DB dưới trạng thái paired_member để không mất lịch sử,
-      // nhưng không còn được coi là một đội độc lập.
-      const {error:mergeError}=await supabaseClient
-        .from("tournament_registrations")
-        .update({status:"paired_member", team_name:teamName})
-        .eq("id",partner.id);
-      if(mergeError) throw mergeError;
-      const idx=registrations.findIndex(r=>String(r.id)===String(survivor.id));
-      if(idx>=0) registrations[idx]=data || {...registrations[idx],member2_id:p.b.member.id,partner_name:p.b.member.full_name,team_name:teamName};
-      const pidx=registrations.findIndex(r=>String(r.id)===String(partner.id));
-      if(pidx>=0) registrations[pidx]={...registrations[pidx],status:"paired_member",team_name:teamName};
-    }
-    showToast(`Đã ghép ${pairs.length} đôi cân trình. Có thể tiếp tục xác nhận phí và sắp bảng.`);
-    await renderTournamentPanel();
-  }catch(error){
-    console.error("AUTO PAIR DOUBLES ERROR:",error);
-    showToast("Không thể ghép đôi: "+(error?.message||error));
-  }
-}
-
-/* =========================================================
    15. GỬI ĐĂNG KÝ
  ========================================================= */
 
@@ -8973,10 +8870,6 @@ async function submitRegistration(tournamentId) {
       ?.value
       .trim() || "";
 
-
-  const isAutoDoubles =
-    tournament.competition_type === "doubles" &&
-    String(tournament.registration_mode || "team") === "individual_auto";
 
   const phone2 =
     document.getElementById("regPhone2")
@@ -9038,7 +8931,7 @@ async function submitRegistration(tournamentId) {
 
   if (
     tournament.competition_type ===
-    "doubles" && !isAutoDoubles
+    "doubles"
   ) {
 
     member2 =
@@ -9077,7 +8970,7 @@ async function submitRegistration(tournamentId) {
   // Vượt giới hạn trình chỉ là cảnh báo, KHÔNG chặn đăng ký.
   const r1 = Number(member1.rating || 1);
   const r2 = member2 ? Number(member2.rating || 1) : 0;
-  const totalRating = tournament.competition_type === "doubles" && !isAutoDoubles ? r1 + r2 : r1;
+  const totalRating = tournament.competition_type === "doubles" ? r1 + r2 : r1;
   const ratingLimit = Number(tournament.rating_limit);
   if(Number.isFinite(ratingLimit) && totalRating > ratingLimit){
     const proceed = confirm(
@@ -9182,14 +9075,10 @@ async function submitRegistration(tournamentId) {
    * Kiểm tra giới hạn số đội/người
    */
 
-  const registrationCapacity = isAutoDoubles && tournament.max_teams
-    ? Number(tournament.max_teams) * 2
-    : Number(tournament.max_teams || 0);
-
   if (
-    registrationCapacity &&
-    (currentRegistrations || []).filter(r => String(r.status || "registered") !== "cancelled").length >=
-      registrationCapacity
+    tournament.max_teams &&
+    (currentRegistrations || []).length >=
+      Number(tournament.max_teams)
   ) {
 
     showRegistrationError(
@@ -9216,7 +9105,7 @@ async function submitRegistration(tournamentId) {
     finalTeamName =
       member1.full_name;
 
-  } else if (!finalTeamName && !isAutoDoubles) {
+  } else if (!finalTeamName) {
 
     finalTeamName =
       (
@@ -9224,10 +9113,6 @@ async function submitRegistration(tournamentId) {
         " & " +
         member2.full_name
       );
-
-  } else if (isAutoDoubles) {
-
-    finalTeamName = member1.full_name;
 
   }
 
@@ -9273,7 +9158,7 @@ async function submitRegistration(tournamentId) {
 
   if (
     tournament.competition_type ===
-    "doubles" && !isAutoDoubles
+    "doubles"
   ) {
 
     payload.member2_id =
@@ -14683,23 +14568,186 @@ function renderAdminRatingManager(){
   },0);
 }
 
+async function getClubPendingRatingAssessments(){
+  if(!isClubAdmin() || !hasAdminPermission("review_club_rating")) return [];
+  const { data, error } = await supabaseClient.rpc("get_club_rating_assessments");
+  if(error){
+    console.warn("Không tải được đề xuất chấm trình của CLB:", error);
+    showToast("Không tải được danh sách đề xuất chấm trình của CLB: " + error.message);
+    return [];
+  }
+  return Array.isArray(data) ? data : [];
+}
+
+function openClubRatingReviewModal(assessmentId){
+  if(!isClubAdmin() || !hasAdminPermission("review_club_rating")){
+    showToast("Tài khoản Chủ tịch CLB chưa được cấp quyền chấm & đề xuất trình VĐV CLB.");
+    return;
+  }
+
+  const assessment = window.__clubPendingAssessments?.find(
+    x => String(x.id) === String(assessmentId)
+  );
+  if(!assessment){
+    showToast("Không tìm thấy đề xuất chấm trình của VĐV.");
+    return;
+  }
+
+  const member = memberById(assessment.member_id);
+  if(!member){
+    showToast("Không tìm thấy thành viên.");
+    return;
+  }
+
+  const initialRating = Number(assessment.proposed_rating || member.rating || 1);
+  openModal("⭐ Chấm & đề xuất trình VĐV CLB", `
+    <div class="admin-panel">
+      <div class="notice">
+        <b>${escapeHtml(member.full_name || "Thành viên")}</b>
+        — CLB: <b>${escapeHtml(member.club || currentAdmin.club_name || "")}</b>
+        — trình hiện tại: <b>${formatRating(member.rating || 1)}</b>
+      </div>
+
+      <div class="form-grid">
+        <div class="field">
+          <label>Kỹ thuật</label>
+          <input id="clubTechnical" type="number" min="0" max="5" step="0.01"
+            value="${Number(assessment.technical || 0)}">
+        </div>
+        <div class="field">
+          <label>Chiến thuật</label>
+          <input id="clubTactical" type="number" min="0" max="5" step="0.01"
+            value="${Number(assessment.tactical || 0)}">
+        </div>
+        <div class="field">
+          <label>Kinh nghiệm</label>
+          <input id="clubExperience" type="number" min="0" max="5" step="0.01"
+            value="${Number(assessment.experience || 0)}">
+        </div>
+        <div class="field">
+          <label>Thi đấu</label>
+          <input id="clubCompetition" type="number" min="0" max="5" step="0.01"
+            value="${Number(assessment.competition || 0)}">
+        </div>
+      </div>
+
+      <div class="field">
+        <label>Điểm trình đề xuất lên Hội đồng cấp cao *</label>
+        <input id="clubProposedRating" type="number" min="1" max="5" step="0.01"
+          value="${initialRating.toFixed(2)}">
+      </div>
+
+      <div class="field">
+        <label>Nhận xét / căn cứ chấm trình của Chủ tịch CLB *</label>
+        <textarea id="clubReviewNote" rows="4"
+          placeholder="Nêu căn cứ đánh giá VĐV..."></textarea>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-primary"
+          onclick="clubReviewRatingAssessment('${escapeHtml(String(assessment.id))}', true)">
+          📤 Duyệt & chuyển Hội đồng
+        </button>
+        <button class="btn btn-danger"
+          onclick="clubReviewRatingAssessment('${escapeHtml(String(assessment.id))}', false)">
+          ❌ Từ chối
+        </button>
+        <button class="btn btn-secondary" onclick="closeModal()">Huỷ</button>
+      </div>
+    </div>
+  `);
+}
+
+async function clubReviewRatingAssessment(assessmentId, approve){
+  if(!isClubAdmin() || !hasAdminPermission("review_club_rating")){
+    showToast("Tài khoản Chủ tịch CLB chưa được cấp quyền chấm & đề xuất trình VĐV CLB.");
+    return;
+  }
+
+  const note = document.getElementById("clubReviewNote")?.value.trim() || "";
+  if(!note){
+    showToast("Vui lòng nhập nhận xét / căn cứ chấm trình.");
+    return;
+  }
+
+  const technical = Number(document.getElementById("clubTechnical")?.value);
+  const tactical = Number(document.getElementById("clubTactical")?.value);
+  const experience = Number(document.getElementById("clubExperience")?.value);
+  const competition = Number(document.getElementById("clubCompetition")?.value);
+  const proposedRating = Number(document.getElementById("clubProposedRating")?.value);
+
+  if(approve){
+    if([technical,tactical,experience,competition].some(v => !Number.isFinite(v) || v < 0 || v > 5)){
+      showToast("Các tiêu chí chấm trình phải nằm trong khoảng 0–5.");
+      return;
+    }
+    if(!Number.isFinite(proposedRating) || proposedRating < 1 || proposedRating > 5){
+      showToast("Điểm trình đề xuất phải từ 1,00 đến 5,00.");
+      return;
+    }
+  }
+
+  if(!confirm(
+    approve
+      ? `Xác nhận chấm ${formatRating(proposedRating)} và chuyển đề xuất này lên Hội đồng cấp cao?`
+      : "Xác nhận từ chối đề xuất chấm trình này?"
+  )) return;
+
+  const { data, error } = await supabaseClient.rpc("club_review_rating_assessment", {
+    p_assessment_id: String(assessmentId),
+    p_approve: !!approve,
+    p_technical: approve ? technical : null,
+    p_tactical: approve ? tactical : null,
+    p_experience: approve ? experience : null,
+    p_competition: approve ? competition : null,
+    p_proposed_rating: approve ? proposedRating : null,
+    p_reviewer_note: note
+  });
+
+  if(error){
+    console.error("CLUB REVIEW RATING:", error);
+    showToast("Không thể xử lý đề xuất: " + error.message);
+    return;
+  }
+
+  closeModal();
+  await refreshApplication();
+  renderAdminPanel();
+  showToast(
+    approve
+      ? "Đã chấm/chỉnh trình và chuyển đề xuất lên Hội đồng cấp cao."
+      : "Đã từ chối đề xuất chấm trình."
+  );
+}
+
 async function renderAdminPanel(){
   if(!isAdmin()){
     openAdminPanel();
     return;
   }
 
-  const { data: assessments, error: assessmentError } = await supabaseClient
-    .from("rating_assessments")
-    .select("*")
-    .eq("status","pending")
-    .order("created_at",{ascending:false});
+  let assessments = [];
+  let assessmentError = null;
+
+  if(isSuperAdmin()){
+    const result = await supabaseClient
+      .from("rating_assessments")
+      .select("*")
+      .eq("status","pending")
+      .eq("review_stage","admin")
+      .order("created_at",{ascending:false});
+    assessments = result.data || [];
+    assessmentError = result.error;
+  }else if(isClubAdmin() && hasAdminPermission("review_club_rating")){
+    assessments = await getClubPendingRatingAssessments();
+  }
 
   if(assessmentError){
     console.error(assessmentError);
   }
 
   window.__pendingAssessments = assessments || [];
+  window.__clubPendingAssessments = isClubAdmin() ? (assessments || []) : [];
 
   const { data: feedbackRows, error: feedbackError } = await supabaseClient
     .rpc("get_rating_feedback_admin", { limit_count: 100 });
@@ -14760,7 +14808,9 @@ async function renderAdminPanel(){
             ? `<button class="btn btn-primary" style="padding:6px 9px" onclick="openManualRatingModal('${a.member_id}',${Number(a.proposed_rating)||1},'${a.id}')">✏️ Chỉnh & chốt</button>
                <button class="btn btn-secondary" style="padding:6px 9px" onclick="approveRatingAssessment('${a.id}',true)">✓ Chốt đề xuất</button>
                <button class="btn btn-danger" style="padding:6px 9px" onclick="approveRatingAssessment('${a.id}',false)">Từ chối</button>`
-            : `<span class="admin-role">Chờ Hội đồng cấp cao</span>`}
+            : hasAdminPermission("review_club_rating")
+              ? `<button class="btn btn-primary" style="padding:6px 9px" onclick="openClubRatingReviewModal('${a.id}')">✏️ Chấm / chỉnh trình</button>`
+              : `<span class="admin-role">Chưa được cấp quyền chấm trình CLB</span>`}
         </td>
       </tr>`;
   }).join("");
@@ -14799,7 +14849,7 @@ async function renderAdminPanel(){
           <b>Tạo tài khoản mới:</b> tạo Email + Mật khẩu trước tại Supabase → Authentication → Users, sau đó gán quyền <b>Quản trị cấp cao</b> hoặc <b>Chủ tịch CLB</b>. Không tạo tài khoản bằng mã frontend để tránh lộ quyền quản trị.
         </div>
         <h4 style="margin-top:18px">🔐 Phân quyền riêng từng Chủ tịch CLB</h4>
-        <div class="notice">Mỗi tài khoản có thể được cấp <b>5/5, 4/5, 3/5...</b> quyền độc lập. Quản trị cấp cao luôn có toàn quyền.</div>
+        <div class="notice">Mỗi tài khoản có thể được cấp từng quyền độc lập. Quản trị cấp cao luôn có toàn quyền.</div>
         <div class="table-wrap">
           <table class="admin-table"><thead><tr><th>Tài khoản</th><th>CLB</th><th>Trạng thái</th><th>Bộ quyền</th><th>Thao tác</th></tr></thead><tbody>
           ${adminUsers.filter(u=>u.role === "club_admin").map(u=>{
@@ -14826,11 +14876,11 @@ async function renderAdminPanel(){
         </table>
       </div>
 
-      <h4 style="margin-top:20px">⭐ Đề xuất chấm trình chờ duyệt</h4>
+      <h4 style="margin-top:20px">${isClubAdmin() ? "⭐ Chấm trình VĐV CLB" : "⭐ Đề xuất chấm trình chờ Hội đồng duyệt"}</h4>
       <div class="table-wrap">
         <table class="admin-table">
           <thead><tr><th>Thành viên</th><th>Điểm đề xuất</th><th>Tổng tự chấm</th><th>Thời gian</th><th>Xử lý</th></tr></thead>
-          <tbody>${pendingHtml || `<tr><td colspan="5">Không có đề xuất chờ duyệt.</td></tr>`}</tbody>
+          <tbody>${pendingHtml || `<tr><td colspan="5">${isClubAdmin() ? "Không có đề xuất chấm trình của VĐV CLB đang chờ xử lý." : "Không có đề xuất chờ Hội đồng duyệt."}</td></tr>`}</tbody>
         </table>
       </div>
 
@@ -14843,7 +14893,7 @@ async function renderAdminPanel(){
       </div>
 
       <div class="notice" style="margin-top:16px">
-        <b>Quyền:</b> Chủ tịch CLB chỉ thực hiện được các tác vụ đã được Quản trị cấp cao cấp riêng. Chủ tịch CLB <b>không được xoá giải</b> và không quyết định rating cuối cùng. Quản trị cấp cao có toàn quyền.
+        <b>Quyền:</b> Chủ tịch CLB chỉ thực hiện được các tác vụ đã được Quản trị cấp cao cấp riêng. Với quyền <b>⭐ Chấm & đề xuất trình VĐV CLB</b>, Chủ tịch chỉ được chấm/chỉnh VĐV thuộc CLB mình và chuyển đề xuất lên Hội đồng cấp cao; Chủ tịch <b>không chốt rating cuối cùng</b>. VĐV tự do vẫn chuyển thẳng Hội đồng cấp cao. Quản trị cấp cao có toàn quyền.
       </div>
     </div>
   `);
@@ -17830,17 +17880,11 @@ function _v28BindCreateFormUi(form){
   const doubles=form.querySelector("#doublesChoice");
   const group=form.querySelector("#groupChoice");
   const direct=form.querySelector("#directChoice");
-  const doublesModeField=form.querySelector("#doublesRegistrationModeField");
-  const refreshDoublesMode=()=>{
+  form.querySelectorAll('input[name="competitionType"]').forEach(x=>x.addEventListener("change",()=>{
     const v=_v28Radio(form,"competitionType","singles");
     singles?.classList.toggle("selected",v==="singles");
     doubles?.classList.toggle("selected",v==="doubles");
-    if(doublesModeField){
-      doublesModeField.style.setProperty("display", v==="doubles" ? "block" : "none", "important");
-    }
-  };
-  form.querySelectorAll('input[name="competitionType"]').forEach(x=>x.addEventListener("change",refreshDoublesMode));
-  refreshDoublesMode();
+  }));
   form.querySelectorAll('input[name="tournamentFormat"]').forEach(x=>x.addEventListener("change",()=>{
     const v=_v28Radio(form,"tournamentFormat","double_elimination");
     group?.classList.toggle("selected",v==="group_stage");
