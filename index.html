@@ -14320,7 +14320,7 @@ async function openAdminPanel(expectedRole){
             id="${isClubLogin ? "clubAdminEmail" : "superAdminEmail"}"
             name="${isClubLogin ? "club_admin_email" : "super_admin_email"}"
             type="email"
-            autocomplete="off"
+            autocomplete="username"
             inputmode="email"
             placeholder="email">
         </div>
@@ -14336,8 +14336,11 @@ async function openAdminPanel(expectedRole){
             id="${isClubLogin ? "clubAdminPassword" : "superAdminPassword"}"
             name="${isClubLogin ? "club_admin_password" : "super_admin_password"}"
             type="password"
-            autocomplete="new-password"
+            autocomplete="current-password"
             placeholder="Mật khẩu">
+        </div>
+        <div class="notice" style="margin-top:10px">
+          <b>Đăng nhập đúng vai trò:</b> tài khoản Chủ tịch CLB chỉ vào được khu vực Chủ tịch CLB; tài khoản Quản trị cấp cao chỉ vào được khu vực Quản trị cấp cao. Hệ thống kiểm tra vai trò sau khi xác thực, không dựa vào ô đăng nhập.
         </div>
         <div class="actions">
           <button class="btn btn-primary" onclick="adminLogin()">🔐 Đăng nhập</button>
@@ -14842,15 +14845,9 @@ function openClubDirectRatingModal(memberId){
   openModal("⭐ Chấm trình VĐV CLB", `
     <div class="admin-panel">
       <div class="notice"><b>${escapeHtml(member.full_name || "Thành viên")}</b> — CLB: <b>${escapeHtml(member.club || currentAdmin.club_name || "")}</b> — trình hiện tại: <b>${formatRating(initial)}</b></div>
-      <p class="small muted">Chấm theo đúng thang 1–10 hiện đang dùng trong hệ thống. Sau khi gửi, đề xuất chuyển thẳng lên Hội đồng cấp cao; điểm chính thức chưa thay đổi.</p>
-      <div class="form-grid">
-        <div class="field"><label>Kỹ thuật · 40%</label><input id="clubDirectTechnical" type="number" min="1" max="10" step="0.01" value="5"></div>
-        <div class="field"><label>Chiến thuật · 25%</label><input id="clubDirectTactical" type="number" min="1" max="10" step="0.01" value="5"></div>
-        <div class="field"><label>Kinh nghiệm · 15%</label><input id="clubDirectExperience" type="number" min="1" max="10" step="0.01" value="5"></div>
-        <div class="field"><label>Thi đấu · 20%</label><input id="clubDirectCompetition" type="number" min="1" max="10" step="0.01" value="5"></div>
-      </div>
+      <p class="small muted">Chủ tịch CLB chỉ cần xác định <b>điểm trình đề xuất</b> và ghi <b>nhận xét/căn cứ</b>. Sau khi gửi, đề xuất chuyển thẳng lên Hội đồng cấp cao; điểm chính thức chưa thay đổi.</p>
       <div class="field"><label>Điểm trình đề xuất *</label><input id="clubDirectProposedRating" type="number" min="1" max="5" step="0.01" value="${initial.toFixed(2)}"></div>
-      <div class="field"><label>Nhận xét / căn cứ chấm trình *</label><textarea id="clubDirectReviewNote" rows="4" placeholder="Nêu căn cứ đánh giá VĐV..."></textarea></div>
+      <div class="field"><label>Nhận xét / căn cứ chấm trình *</label><textarea id="clubDirectReviewNote" rows="5" placeholder="Nhập nhận xét / căn cứ chấm trình VĐV..."></textarea></div>
       <div class="actions">
         <button class="btn btn-primary" onclick="submitClubDirectRating('${escapeHtml(String(member.id))}')">📤 Gửi Hội đồng cấp cao</button>
         <button class="btn btn-secondary" onclick="renderClubRatingManager()">← Danh sách CLB</button>
@@ -14868,20 +14865,25 @@ async function submitClubDirectRating(memberId){
     showToast("Chỉ được chấm trình VĐV thuộc CLB của mình.");
     return;
   }
-  const technical=Number(document.getElementById("clubDirectTechnical")?.value);
-  const tactical=Number(document.getElementById("clubDirectTactical")?.value);
-  const experience=Number(document.getElementById("clubDirectExperience")?.value);
-  const competition=Number(document.getElementById("clubDirectCompetition")?.value);
   const proposedRating=Number(document.getElementById("clubDirectProposedRating")?.value);
   const note=document.getElementById("clubDirectReviewNote")?.value.trim() || "";
 
-  if([technical,tactical,experience,competition].some(v=>!Number.isFinite(v)||v<1||v>10)){
-    showToast("4 tiêu chí phải nằm trong khoảng 1–10."); return;
-  }
   if(!Number.isFinite(proposedRating)||proposedRating<1||proposedRating>5){
     showToast("Điểm trình đề xuất phải từ 1,00 đến 5,00."); return;
   }
   if(!note){ showToast("Vui lòng nhập nhận xét / căn cứ chấm trình."); return; }
+
+  /*
+   * DB/RPC cũ vẫn lưu 4 tiêu chí 1–10. Để không phải đổi SQL và không làm
+   * mất dữ liệu cũ, quy đổi ngược chính điểm Chủ tịch nhập vào một giá trị
+   * tương đương cho cả 4 tiêu chí. Vì cả 4 trọng số cộng lại = 100%, điểm
+   * sau công thức DB sẽ giữ nguyên đúng mức điểm đề xuất.
+   */
+  const compatibilityScore = 1 + ((proposedRating - 1) / 4) * 9;
+  const technical=compatibilityScore;
+  const tactical=compatibilityScore;
+  const experience=compatibilityScore;
+  const competition=compatibilityScore;
 
   const {data:existing,error:existingError}=await supabaseClient
     .from("rating_assessments")
@@ -14945,14 +14947,9 @@ function openClubRatingReviewModal(assessmentId){
   openModal("⭐ Chấm & đề xuất trình VĐV CLB", `
     <div class="admin-panel">
       <div class="notice"><b>${escapeHtml(member.full_name || "Thành viên")}</b> — CLB: <b>${escapeHtml(member.club || currentAdmin.club_name || "")}</b> — trình hiện tại: <b>${formatRating(member.rating || 1)}</b></div>
-      <div class="form-grid">
-        <div class="field"><label>Kỹ thuật · 40%</label><input id="clubTechnical" type="number" min="1" max="10" step="0.01" value="${Number(assessment.technical || 5)}"></div>
-        <div class="field"><label>Chiến thuật · 25%</label><input id="clubTactical" type="number" min="1" max="10" step="0.01" value="${Number(assessment.tactical || 5)}"></div>
-        <div class="field"><label>Kinh nghiệm · 15%</label><input id="clubExperience" type="number" min="1" max="10" step="0.01" value="${Number(assessment.experience || 5)}"></div>
-        <div class="field"><label>Thi đấu · 20%</label><input id="clubCompetition" type="number" min="1" max="10" step="0.01" value="${Number(assessment.competition || 5)}"></div>
-      </div>
+      <p class="small muted">Chỉ cần <b>điểm trình đề xuất</b> và <b>nhận xét/căn cứ</b>. Các tiêu chí kỹ thuật, chiến thuật, kinh nghiệm và thi đấu không hiển thị ở bước này.</p>
       <div class="field"><label>Điểm trình đề xuất lên Hội đồng cấp cao *</label><input id="clubProposedRating" type="number" min="1" max="5" step="0.01" value="${initial.toFixed(2)}"></div>
-      <div class="field"><label>Nhận xét / căn cứ chấm trình của Chủ tịch CLB *</label><textarea id="clubReviewNote" rows="4" placeholder="Nêu căn cứ đánh giá VĐV..."></textarea></div>
+      <div class="field"><label>Nhận xét / căn cứ chấm trình của Chủ tịch CLB *</label><textarea id="clubReviewNote" rows="5" placeholder="Nhập nhận xét / căn cứ chấm trình VĐV..."></textarea></div>
       <div class="actions">
         <button class="btn btn-primary" onclick="clubReviewRatingAssessment('${escapeHtml(String(assessment.id))}',true)">📤 Duyệt & chuyển Hội đồng</button>
         <button class="btn btn-danger" onclick="clubReviewRatingAssessment('${escapeHtml(String(assessment.id))}',false)">❌ Từ chối</button>
@@ -14996,17 +14993,15 @@ async function clubReviewRatingAssessment(assessmentId, approve){
       return;
     }
   }else{
-    const technical=Number(document.getElementById("clubTechnical")?.value);
-    const tactical=Number(document.getElementById("clubTactical")?.value);
-    const experience=Number(document.getElementById("clubExperience")?.value);
-    const competition=Number(document.getElementById("clubCompetition")?.value);
     const proposedRating=Number(document.getElementById("clubProposedRating")?.value);
-    if([technical,tactical,experience,competition].some(v=>!Number.isFinite(v)||v<1||v>10)){
-      showToast("4 tiêu chí phải nằm trong khoảng 1–10."); return;
-    }
     if(!Number.isFinite(proposedRating)||proposedRating<1||proposedRating>5){
       showToast("Điểm trình đề xuất phải từ 1,00 đến 5,00."); return;
     }
+    const compatibilityScore = 1 + ((proposedRating - 1) / 4) * 9;
+    const technical=compatibilityScore;
+    const tactical=compatibilityScore;
+    const experience=compatibilityScore;
+    const competition=compatibilityScore;
     if(!confirm(`Xác nhận chấm ${formatRating(proposedRating)} và chuyển đề xuất lên Hội đồng cấp cao?`)) return;
     const {data,error}=await supabaseClient.rpc("club_review_rating_assessment",{
       p_assessment_id:String(assessmentId),
