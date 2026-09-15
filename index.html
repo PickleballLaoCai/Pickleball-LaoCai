@@ -3516,7 +3516,14 @@ function normalizeAdminPermissions(raw){
 function hasAdminPermission(permission){
   if(isSuperAdmin()) return true;
   if(!isClubAdmin()) return false;
-  return currentAdmin?.permissions?.[permission] === true;
+  const perms = currentAdmin?.permissions || {};
+  // Tương thích tuyệt đối với tài khoản Chủ tịch CLB đã được cấp
+  // quyền propose_rating từ trước khi bổ sung cờ review_club_rating.
+  // Luồng chấm trình CLB là một phần của quyền gửi đề xuất chấm trình.
+  if(permission === "review_club_rating") {
+    return perms.review_club_rating === true || perms.propose_rating === true;
+  }
+  return perms[permission] === true;
 }
 function isSuperAdmin(){
   return currentAdmin?.role === "super_admin";
