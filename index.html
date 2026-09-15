@@ -14724,6 +14724,7 @@ async function _loadClubPendingAssessmentsForMembers(clubMembers){
     .select("*")
     .in("member_id",ids)
     .eq("status","pending")
+    .eq("review_stage","club")
     .order("created_at",{ascending:false});
   if(error){
     console.warn("Không tải được đề xuất chấm trình CLB:",error);
@@ -15024,7 +15025,7 @@ async function renderAdminPanel(){
     .from("rating_assessments")
     .select("*")
     .eq("status","pending")
-    .neq("review_stage","club")
+    .eq("review_stage","admin")
     .order("created_at",{ascending:false});
 
   if(assessmentError){
